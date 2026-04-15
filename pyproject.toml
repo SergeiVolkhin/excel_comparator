@@ -1,0 +1,139 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "excel-comparator"
+version = "0.1.0"
+description = "Modular Excel/CSV comparator with multiple comparison strategies and output formats"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "excel_comparator contributors" }]
+dependencies = [
+    "pandas>=1.5.0,<3.0.0",
+    "numpy>=1.21.0,<2.0.0",
+    "openpyxl>=3.0.10,<4.0.0",
+    "chardet>=5.0.0,<6.0.0",
+    "python-dateutil>=2.8.2,<3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "pytest-benchmark>=4.0",
+    "hypothesis>=6.100",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pydantic-settings>=2.3",
+    "types-python-dateutil",
+    "pandas-stubs",
+]
+
+[project.scripts]
+excel-comparator = "main:main"
+
+[tool.setuptools]
+packages = ["src"]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+src = "src"
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:openpyxl.*",
+    "ignore::DeprecationWarning:pandas.*",
+    "ignore::UserWarning:openpyxl.*",
+]
+markers = [
+    "slow: smoke/perf tests on large generated files",
+    "benchmark: pytest-benchmark perf tests",
+]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = ["src/gui/*", "*/__init__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "venv", "htmlcov", "logs", "project_structure.md"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "B",         # bugbear
+    "UP",        # pyupgrade
+    "C90",       # mccabe complexity
+    "N",         # pep8-naming
+    "SIM",       # simplify
+    "RUF",       # ruff-specific
+]
+ignore = [
+    "E501",  # long lines — handled by formatter
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N802", "N803"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+show_error_codes = true
+exclude = ["venv/", ".venv/", "htmlcov/", "build/", "dist/"]
+
+[[tool.mypy.overrides]]
+module = ["chardet.*", "openpyxl.*"]
+ignore_missing_imports = true
