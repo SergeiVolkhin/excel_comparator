@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.benchmarks/
+.hypothesis/
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime artifacts
+logs/
+*.log
+
+# Local generated Excel/CSV outputs (keep tests/fixtures generated in tmp_path)
+*.xlsx
+*.xls
+!tests/fixtures/**/*.xlsx
+
+# Environment
+.env
+.env.local
