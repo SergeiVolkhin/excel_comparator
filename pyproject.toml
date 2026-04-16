@@ -119,7 +119,11 @@ select = [
     "RUF",       # ruff-specific
 ]
 ignore = [
-    "E501",  # long lines — handled by formatter
+    "E501",   # long lines — handled by formatter
+    "RUF001", # Cyrillic in docstrings/strings — legitimate for Russian codebase
+    "RUF002",
+    "RUF003",
+    "W293",   # blank-line-with-whitespace inside multi-line string literals
 ]
 
 [tool.ruff.lint.mccabe]

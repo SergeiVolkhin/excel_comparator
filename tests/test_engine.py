@@ -31,7 +31,13 @@ class TestRegistries:
 class TestDetermineFormatter:
     @pytest.mark.parametrize(
         ("suffix", "expected"),
-        [(".xlsx", "excel"), (".xls", "excel"), (".html", "html"), (".htm", "html"), (".bin", "excel")],
+        [
+            (".xlsx", "excel"),
+            (".xls", "excel"),
+            (".html", "html"),
+            (".htm", "html"),
+            (".bin", "excel"),
+        ],
     )
     def test_auto(self, engine: ComparisonEngine, suffix: str, expected: bool) -> None:
         assert engine._determine_formatter(Path(f"out{suffix}")) == expected

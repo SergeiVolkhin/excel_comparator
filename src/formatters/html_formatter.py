@@ -2,133 +2,141 @@
 HTML форматтер для вывода результатов сравнения
 """
 
-from pathlib import Path
-from typing import List, Dict, Any, Iterator, Optional, Tuple
-import pandas as pd
-from datetime import datetime
 import logging
-import os
-import tempfile
-import shutil
 import math
+import shutil
+import tempfile
+from datetime import datetime
+from pathlib import Path
+from typing import Any, ClassVar
 
-from ..core.interfaces import IOutputFormatter, ComparisonResult
+import pandas as pd
+
 from ..core.exceptions import ApplicationError
+from ..core.interfaces import ComparisonResult, IOutputFormatter
 
 
 class HTMLOutputFormatter(IOutputFormatter):
     """Форматтер для вывода результатов сравнения в HTML"""
-    
-    SUPPORTED_FORMATS = ['.html', '.htm']
-    
+
+    SUPPORTED_FORMATS: ClassVar[list[str]] = [".html", ".htm"]
+
     def __init__(self, config=None):
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
-        
+
         # Настройки стилей
-        self.highlight_color = getattr(config.comparison, 'highlight_color', 'FFFF00') if config else 'FFFF00'
-        
+        self.highlight_color = (
+            getattr(config.comparison, "highlight_color", "FFFF00") if config else "FFFF00"
+        )
+
         # Настройки пагинации для больших таблиц
-        self.page_size = getattr(config.comparison, 'max_differences_display', 1000) if config else 1000
+        self.page_size = (
+            getattr(config.comparison, "max_differences_display", 1000) if config else 1000
+        )
         self.enable_pagination = True
-    
+
     def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
         """Форматирует и сохраняет результат сравнения в HTML"""
         try:
             self.logger.info(f"Создание HTML отчета: {output_path}")
-            
+
             # Определяем размеры данных
             total_rows = len(result.file1_data)
             self.logger.info(f"Размер данных: {total_rows} строк")
-            
+
             # Для маленьких таблиц используем прямой подход
             if total_rows <= self.page_size or not self.enable_pagination:
                 self.logger.info("Используем прямую генерацию HTML (без пагинации)")
                 html_content = self._generate_html_report(result, options)
-                
-                with open(output_path, 'w', encoding='utf-8') as f:
+
+                with open(output_path, "w", encoding="utf-8") as f:
                     f.write(html_content)
             else:
                 # Для больших таблиц используем потоковую запись и пагинацию
-                self.logger.info(f"Используем потоковую генерацию HTML с пагинацией (размер страницы: {self.page_size})")
+                self.logger.info(
+                    f"Используем потоковую генерацию HTML с пагинацией (размер страницы: {self.page_size})"
+                )
                 self._generate_paginated_html_report(result, output_path, options)
-            
+
             self.logger.info(f"HTML отчет успешно создан: {output_path}")
-            
+
         except Exception as e:
             self.logger.error(f"Ошибка создания HTML отчета: {e}", exc_info=True)
-            raise ApplicationError(f"Не удалось создать HTML отчет: {e}")
-    
-    def get_supported_formats(self) -> List[str]:
+            raise ApplicationError(f"Не удалось создать HTML отчет: {e}") from e
+
+    def get_supported_formats(self) -> list[str]:
         """Возвращает список поддерживаемых форматов"""
         return self.SUPPORTED_FORMATS.copy()
-    
-    def _generate_paginated_html_report(self, result: ComparisonResult, output_path: Path, options: Dict[str, Any]) -> None:
+
+    def _generate_paginated_html_report(
+        self, result: ComparisonResult, output_path: Path, options: dict[str, Any]
+    ) -> None:
         """Генерирует многостраничный HTML отчет для больших таблиц"""
-        file1_name = options.get('file1_name', 'Файл 1')
-        file2_name = options.get('file2_name', 'Файл 2')
+        file1_name = options.get("file1_name", "Файл 1")
+        file2_name = options.get("file2_name", "Файл 2")
         total_rows = len(result.file1_data)
-        
+
         # Создаем временную директорию для многостраничного отчета
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
-            
+
             # Вычисляем количество страниц
             num_pages = math.ceil(total_rows / self.page_size)
             self.logger.info(f"Создание {num_pages} страниц HTML отчета")
-            
+
             # Создаем главную страницу
             index_html = temp_dir_path / "index.html"
             self._generate_index_page(index_html, result, file1_name, file2_name, num_pages)
-            
+
             # Создаем страницы с данными
             for page_num in range(num_pages):
                 start_row = page_num * self.page_size
                 end_row = min(start_row + self.page_size, total_rows)
-                
+
                 # Извлекаем фрагмент данных для текущей страницы
                 page_data1 = result.file1_data.iloc[start_row:end_row].copy()
                 page_data2 = result.file2_data.iloc[start_row:end_row].copy()
                 page_mask = result.differences_mask.iloc[start_row:end_row].copy()
-                
+
                 # Создаем временный результат для этой страницы
                 page_result = ComparisonResult(
                     differences_mask=page_mask,
                     file1_data=page_data1,
                     file2_data=page_data2,
-                    metadata=result.metadata.copy()
+                    metadata=result.metadata.copy(),
                 )
-                
+
                 # Обновляем метаданные для отображения информации о странице
-                page_result.metadata['page_info'] = {
-                    'current_page': page_num + 1,
-                    'total_pages': num_pages,
-                    'start_row': start_row + 1,
-                    'end_row': end_row,
-                    'total_rows': total_rows
+                page_result.metadata["page_info"] = {
+                    "current_page": page_num + 1,
+                    "total_pages": num_pages,
+                    "start_row": start_row + 1,
+                    "end_row": end_row,
+                    "total_rows": total_rows,
                 }
-                
+
                 # Генерируем HTML для текущей страницы
                 page_options = options.copy()
-                page_options['page_num'] = page_num + 1
-                page_options['num_pages'] = num_pages
-                
+                page_options["page_num"] = page_num + 1
+                page_options["num_pages"] = num_pages
+
                 page_html = temp_dir_path / f"page_{page_num + 1}.html"
-                with open(page_html, 'w', encoding='utf-8') as f:
+                with open(page_html, "w", encoding="utf-8") as f:
                     page_content = self._generate_html_report(page_result, page_options)
                     f.write(page_content)
-                
+
                 self.logger.info(f"Создана страница {page_num + 1} из {num_pages}")
-            
+
             # Копируем файлы из временной директории в конечную
-            if output_path.suffix.lower() in ['.html', '.htm']:
+            if output_path.suffix.lower() in [".html", ".htm"]:
                 # Если указан один файл, то это будет главная страница
                 shutil.copy2(index_html, output_path)
-                
+
                 # Другие страницы помещаем рядом
                 output_dir = output_path.parent
                 base_name = output_path.stem
-                
+
                 for page_num in range(num_pages):
                     src_page = temp_dir_path / f"page_{page_num + 1}.html"
                     dst_page = output_dir / f"{base_name}_page_{page_num + 1}.html"
@@ -137,60 +145,68 @@ class HTMLOutputFormatter(IOutputFormatter):
                 # Если указана директория, копируем всё туда
                 if not output_path.exists():
                     output_path.mkdir(parents=True)
-                    
+
                 for html_file in temp_dir_path.glob("*.html"):
                     shutil.copy2(html_file, output_path / html_file.name)
-    
-    def _generate_index_page(self, output_file: Path, result: ComparisonResult, 
-                           file1_name: str, file2_name: str, num_pages: int) -> None:
+
+    def _generate_index_page(
+        self,
+        output_file: Path,
+        result: ComparisonResult,
+        file1_name: str,
+        file2_name: str,
+        num_pages: int,
+    ) -> None:
         """Генерирует главную страницу для многостраничного отчета"""
         html_parts = [
             self._generate_html_header(),
             self._generate_summary_section(result, file1_name, file2_name),
             self._generate_statistics_section(result),
             self._generate_pagination_section(num_pages),
-            self._generate_html_footer()
+            self._generate_html_footer(),
         ]
-        
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(html_parts))
-    
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(html_parts))
+
     def _generate_pagination_section(self, num_pages: int) -> str:
         """Генерирует секцию с навигацией по страницам"""
         links = []
         for page_num in range(1, num_pages + 1):
-            links.append(f'<a href="page_{page_num}.html" class="page-link">Страница {page_num}</a>')
-        
+            links.append(
+                f'<a href="page_{page_num}.html" class="page-link">Страница {page_num}</a>'
+            )
+
         return f"""
         <section class="pagination">
             <h2>📄 Навигация по страницам</h2>
             <div class="pagination-links">
-                {' | '.join(links)}
+                {" | ".join(links)}
             </div>
         </section>
         """
-    
-    def _generate_html_report(self, result: ComparisonResult, options: Dict[str, Any]) -> str:
+
+    def _generate_html_report(self, result: ComparisonResult, options: dict[str, Any]) -> str:
         """Генерирует HTML отчет"""
-        
-        file1_name = options.get('file1_name', 'Файл 1')
-        file2_name = options.get('file2_name', 'Файл 2')
-        
+
+        file1_name = options.get("file1_name", "Файл 1")
+        file2_name = options.get("file2_name", "Файл 2")
+
         # Проверяем, является ли это частью многостраничного отчета
-        is_paged_report = 'page_num' in options and 'num_pages' in options
-        
+        is_paged_report = "page_num" in options and "num_pages" in options
+
         html_parts = [
             self._generate_html_header(),
-            self._generate_summary_section(result, file1_name, file2_name)
+            self._generate_summary_section(result, file1_name, file2_name),
         ]
-        
+
         # Добавляем информацию о странице, если это часть многостраничного отчета
         if is_paged_report:
-            page_info = result.metadata.get('page_info', {})
+            page_info = result.metadata.get("page_info", {})
             page_html = f"""
             <div class="page-info">
-                <p>Страница {page_info.get('current_page', 1)} из {page_info.get('total_pages', 1)}</p>
-                <p>Строки {page_info.get('start_row', 1)}-{page_info.get('end_row', self.page_size)} из {page_info.get('total_rows', 0)}</p>
+                <p>Страница {page_info.get("current_page", 1)} из {page_info.get("total_pages", 1)}</p>
+                <p>Строки {page_info.get("start_row", 1)}-{page_info.get("end_row", self.page_size)} из {page_info.get("total_rows", 0)}</p>
                 <p><a href="index.html">← Вернуться к сводке</a></p>
             </div>
             """
@@ -198,29 +214,29 @@ class HTMLOutputFormatter(IOutputFormatter):
         else:
             # Если это одностраничный отчет, добавляем секцию статистики
             html_parts.append(self._generate_statistics_section(result))
-        
+
         # Добавляем секцию сравнения данных
         html_parts.append(self._generate_data_comparison_section(result, file1_name, file2_name))
-        
+
         # Добавляем навигацию по страницам, если это часть многостраничного отчета
         if is_paged_report:
-            page_num = options['page_num']
-            num_pages = options['num_pages']
-            
+            page_num = options["page_num"]
+            num_pages = options["num_pages"]
+
             navigation = f"""
             <div class="page-navigation">
-                {f'<a href="page_{page_num-1}.html" class="nav-link">← Предыдущая</a>' if page_num > 1 else ''}
+                {f'<a href="page_{page_num - 1}.html" class="nav-link">← Предыдущая</a>' if page_num > 1 else ""}
                 <a href="index.html" class="nav-link">На главную</a>
-                {f'<a href="page_{page_num+1}.html" class="nav-link">Следующая →</a>' if page_num < num_pages else ''}
+                {f'<a href="page_{page_num + 1}.html" class="nav-link">Следующая →</a>' if page_num < num_pages else ""}
             </div>
             """
             html_parts.append(navigation)
-        
+
         # Добавляем подвал
         html_parts.append(self._generate_html_footer())
-        
-        return '\n'.join(html_parts)
-    
+
+        return "\n".join(html_parts)
+
     def _generate_html_header(self) -> str:
         """Генерирует заголовок HTML документа"""
         return f"""<!DOCTYPE html>
@@ -237,14 +253,16 @@ class HTMLOutputFormatter(IOutputFormatter):
     <div class="container">
         <header>
             <h1>📊 Отчет сравнения файлов</h1>
-            <p class="timestamp">Создано: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}</p>
+            <p class="timestamp">Создано: {datetime.now().strftime("%d.%m.%Y %H:%M:%S")}</p>
         </header>"""
-    
-    def _generate_summary_section(self, result: ComparisonResult, file1_name: str, file2_name: str) -> str:
+
+    def _generate_summary_section(
+        self, result: ComparisonResult, file1_name: str, file2_name: str
+    ) -> str:
         """Генерирует секцию с общей информацией"""
-        
+
         metadata = result.metadata
-        
+
         return f"""
         <section class="summary">
             <h2>📋 Общая информация</h2>
@@ -259,32 +277,32 @@ class HTMLOutputFormatter(IOutputFormatter):
                 </div>
                 <div class="info-item">
                     <label>Размер данных:</label>
-                    <span>{metadata.get('shape', 'N/A')}</span>
+                    <span>{metadata.get("shape", "N/A")}</span>
                 </div>
                 <div class="info-item">
                     <label>Тип сравнения:</label>
-                    <span>{metadata.get('comparison_type', 'basic')}</span>
+                    <span>{metadata.get("comparison_type", "basic")}</span>
                 </div>
             </div>
         </section>
         """
-    
+
     def _generate_statistics_section(self, result: ComparisonResult) -> str:
         """Генерирует секцию со статистикой"""
-        
+
         metadata = result.metadata
-        total_cells = metadata.get('total_cells', 0)
-        different_cells = metadata.get('different_cells', 0)
-        similarity = metadata.get('similarity_percentage', 0)
-        
+        total_cells = metadata.get("total_cells", 0)
+        different_cells = metadata.get("different_cells", 0)
+        similarity = metadata.get("similarity_percentage", 0)
+
         # Определяем цвет для индикатора схожести
         if similarity >= 90:
-            similarity_class = 'high'
+            similarity_class = "high"
         elif similarity >= 70:
-            similarity_class = 'medium'
+            similarity_class = "medium"
         else:
-            similarity_class = 'low'
-        
+            similarity_class = "low"
+
         stats_html = f"""
         <section class="statistics">
             <h2>📈 Статистика сравнения</h2>
@@ -302,22 +320,22 @@ class HTMLOutputFormatter(IOutputFormatter):
                     <div class="stat-label">Схожесть</div>
                 </div>
         """
-        
+
         # Добавляем дополнительную статистику если есть
-        if 'fuzzy_matches' in metadata:
+        if "fuzzy_matches" in metadata:
             stats_html += f"""
                 <div class="stat-card">
-                    <div class="stat-value">{metadata['fuzzy_matches']}</div>
+                    <div class="stat-value">{metadata["fuzzy_matches"]}</div>
                     <div class="stat-label">Нечетких совпадений</div>
                 </div>
             """
-        
+
         stats_html += """
             </div>
         """
-        
+
         # Добавляем детальную статистику по столбцам
-        if hasattr(result, 'differences_mask'):
+        if hasattr(result, "differences_mask"):
             column_stats = self._generate_column_statistics(result.differences_mask)
             stats_html += f"""
             <div class="column-stats">
@@ -325,21 +343,21 @@ class HTMLOutputFormatter(IOutputFormatter):
                 {column_stats}
             </div>
             """
-        
+
         stats_html += "</section>"
-        
+
         return stats_html
-    
+
     def _generate_column_statistics(self, differences_mask: pd.DataFrame) -> str:
         """Генерирует статистику по столбцам"""
-        
+
         column_stats = []
         total_rows = len(differences_mask)
-        
+
         for col in differences_mask.columns:
             diff_count = differences_mask[col].sum()
             diff_percentage = (diff_count / total_rows) * 100 if total_rows > 0 else 0
-            
+
             if diff_count > 0:
                 column_stats.append(f"""
                 <div class="column-stat">
@@ -350,20 +368,25 @@ class HTMLOutputFormatter(IOutputFormatter):
                     </div>
                 </div>
                 """)
-        
+
         if not column_stats:
             return "<p>Различий по столбцам не найдено</p>"
-        
-        return '\n'.join(column_stats)
-    
-    def _generate_data_comparison_section(self, result: ComparisonResult, 
-                                        file1_name: str, file2_name: str) -> str:
+
+        return "\n".join(column_stats)
+
+    def _generate_data_comparison_section(
+        self, result: ComparisonResult, file1_name: str, file2_name: str
+    ) -> str:
         """Генерирует секцию с данными сравнения"""
-        
+
         # Создаем таблицы с подсветкой различий
-        table1_html = self._create_data_table(result.file1_data, result.differences_mask, f"Данные: {file1_name}")
-        table2_html = self._create_data_table(result.file2_data, result.differences_mask, f"Данные: {file2_name}")
-        
+        table1_html = self._create_data_table(
+            result.file1_data, result.differences_mask, f"Данные: {file1_name}"
+        )
+        table2_html = self._create_data_table(
+            result.file2_data, result.differences_mask, f"Данные: {file2_name}"
+        )
+
         return f"""
         <section class="data-comparison">
             <h2>📄 Сравнение данных</h2>
@@ -377,22 +400,24 @@ class HTMLOutputFormatter(IOutputFormatter):
             </div>
         </section>
         """
-    
+
     def _create_data_table(self, data: pd.DataFrame, mask: pd.DataFrame, title: str) -> str:
         """Создает HTML таблицу с данными и подсветкой"""
-        
+
         # Ограничиваем количество отображаемых строк для производительности
         max_rows = self.page_size
-        
-        if len(data) > max_rows and not 'page_info' in data.attrs:
+
+        if len(data) > max_rows and "page_info" not in data.attrs:
             display_data = data.head(max_rows)
             display_mask = mask.head(max_rows)
-            truncated_note = f"<p class='truncated-note'>⚠️ Показаны первые {max_rows} строк из {len(data)}</p>"
+            truncated_note = (
+                f"<p class='truncated-note'>⚠️ Показаны первые {max_rows} строк из {len(data)}</p>"
+            )
         else:
             display_data = data
             display_mask = mask
             truncated_note = ""
-        
+
         # Создаем заголовок таблицы
         table_html = f"""
         <div class="data-table">
@@ -404,37 +429,39 @@ class HTMLOutputFormatter(IOutputFormatter):
                         <tr>
                             <th>#</th>
         """
-        
+
         # Добавляем заголовки столбцов
         for col in display_data.columns:
             table_html += f"<th>{col}</th>"
-        
+
         table_html += "</tr></thead><tbody>"
-        
+
         # Добавляем строки данных
         for idx, (row_idx, row) in enumerate(display_data.iterrows()):
             table_html += f"<tr><td class='row-index'>{idx + 1}</td>"
-            
+
             for col in display_data.columns:
                 value = row[col]
-                is_different = display_mask.at[row_idx, col] if row_idx in display_mask.index else False
-                
+                is_different = (
+                    display_mask.at[row_idx, col] if row_idx in display_mask.index else False
+                )
+
                 # Форматируем значение
                 if pd.isna(value):
                     formatted_value = '<span class="null-value">NULL</span>'
                 else:
                     formatted_value = str(value)
-                
+
                 # Применяем стиль для различающихся ячеек
-                cell_class = 'different' if is_different else ''
+                cell_class = "different" if is_different else ""
                 table_html += f'<td class="{cell_class}">{formatted_value}</td>'
-            
+
             table_html += "</tr>"
-        
+
         table_html += "</tbody></table></div></div>"
-        
+
         return table_html
-    
+
     def _generate_html_footer(self) -> str:
         """Генерирует подвал HTML документа"""
         return """
@@ -460,7 +487,7 @@ class HTMLOutputFormatter(IOutputFormatter):
 </body>
 </html>
         """
-    
+
     def _get_css_styles(self) -> str:
         """Возвращает CSS стили для HTML отчета"""
         return f"""

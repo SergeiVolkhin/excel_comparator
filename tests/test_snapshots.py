@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import pytest
@@ -36,9 +35,7 @@ def _strip_dynamic_html(text: str) -> str:
 
 
 class TestExcelSnapshot:
-    def test_sheet_structure_stable(
-        self, fixed_result: ComparisonResult, tmp_path: Path
-    ) -> None:
+    def test_sheet_structure_stable(self, fixed_result: ComparisonResult, tmp_path: Path) -> None:
         out = tmp_path / "r.xlsx"
         ExcelOutputFormatter().format(fixed_result, out, file1_name="A", file2_name="B")
 
@@ -49,16 +46,14 @@ class TestExcelSnapshot:
 
         # Column headers (id / name) appear somewhere on each data sheet;
         # formatter prepends a title row, so we scan all rows.
-        for sheet, rows in snap.items():
+        for rows in snap.values():
             flat = [c for row in rows for c in row if c is not None]
-            if any("id" == str(c).strip() for c in flat):
-                assert any("name" == str(c).strip() for c in flat)
+            if any(str(c).strip() == "id" for c in flat):
+                assert any(str(c).strip() == "name" for c in flat)
 
 
 class TestHTMLSnapshot:
-    def test_report_structure_stable(
-        self, fixed_result: ComparisonResult, tmp_path: Path
-    ) -> None:
+    def test_report_structure_stable(self, fixed_result: ComparisonResult, tmp_path: Path) -> None:
         out = tmp_path / "r.html"
         HTMLOutputFormatter().format(fixed_result, out, file1_name="A", file2_name="B")
 

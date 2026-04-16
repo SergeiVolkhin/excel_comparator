@@ -39,9 +39,7 @@ class TestCompareHappyPaths:
         assert bool(result.differences_mask.loc[1, "a"]) is True
 
     def test_all_cells_diff(self, comp: BasicComparator, df_base: pd.DataFrame) -> None:
-        df2 = df_base.copy() * 0 if False else pd.DataFrame(
-            {"a": [9, 9, 9], "b": ["p", "p", "p"]}
-        )
+        df2 = df_base.copy() * 0 if False else pd.DataFrame({"a": [9, 9, 9], "b": ["p", "p", "p"]})
         result = comp.compare(df_base, df2)
         assert result.differences_mask.sum().sum() == df_base.size
         assert result.metadata["similarity_percentage"] == 0.0
@@ -74,9 +72,7 @@ class TestCompareOptions:
         result = comp.compare(df1, df2, ignore_whitespace=True)
         assert result.differences_mask.sum().sum() == 0
 
-    def test_options_stored_in_metadata(
-        self, comp: BasicComparator, df_base: pd.DataFrame
-    ) -> None:
+    def test_options_stored_in_metadata(self, comp: BasicComparator, df_base: pd.DataFrame) -> None:
         result = comp.compare(df_base, df_base.copy(), ignore_case=True)
         assert result.metadata["comparison_options"] == {"ignore_case": True}
 
