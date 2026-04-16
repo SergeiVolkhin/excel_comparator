@@ -133,10 +133,7 @@ class ListDifferenceAnalyzer(IDifferenceAnalyzer):
 
         # Проверка изменения порядка: только если содержимое одинаковое
         order_changed = (
-            not added
-            and not removed
-            and len(frequency_changes) == 0
-            and old_list != new_list
+            not added and not removed and len(frequency_changes) == 0 and old_list != new_list
         )
 
         return {

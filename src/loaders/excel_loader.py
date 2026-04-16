@@ -56,9 +56,7 @@ class ExcelFileLoader(IFileLoader):
             if read_only and file_path.suffix.lower() == ".xlsx":
                 df = self._load_xlsx_readonly(file_path, sheet_name, header)
             else:
-                engine: ExcelEngine = (
-                    "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
-                )
+                engine: ExcelEngine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
                 df = cast(
                     pd.DataFrame,
                     pd.read_excel(
@@ -77,9 +75,7 @@ class ExcelFileLoader(IFileLoader):
             return df
 
         except PermissionError as e:
-            raise FileLoadError(
-                str(file_path), "Закройте файл Excel и попробуйте снова"
-            ) from e
+            raise FileLoadError(str(file_path), "Закройте файл Excel и попробуйте снова") from e
         except pd.errors.EmptyDataError as e:
             raise FileLoadError(str(file_path), "Файл не содержит данных") from e
         except Exception as e:
@@ -87,9 +83,7 @@ class ExcelFileLoader(IFileLoader):
             raise FileLoadError(str(file_path), str(e)) from e
 
     @staticmethod
-    def _load_xlsx_readonly(
-        file_path: Path, sheet_name: int | str, header: int
-    ) -> pd.DataFrame:
+    def _load_xlsx_readonly(file_path: Path, sheet_name: int | str, header: int) -> pd.DataFrame:
         """Stream xlsx through openpyxl read_only mode to avoid materialising
         the full workbook in memory. Much cheaper for large files.
         """
@@ -132,9 +126,7 @@ class ExcelFileLoader(IFileLoader):
     def preview_data(self, file_path: Path, max_rows: int = 5) -> pd.DataFrame:
         """Предварительный просмотр данных из файла"""
         try:
-            engine: ExcelEngine = (
-                "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
-            )
+            engine: ExcelEngine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
             return pd.read_excel(file_path, nrows=max_rows, engine=engine)
         except Exception as e:
             self.logger.error(f"Ошибка предварительного просмотра {file_path}: {e}")

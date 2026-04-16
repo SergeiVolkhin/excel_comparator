@@ -84,7 +84,6 @@ class TestCompareOptions:
         columns entirely; previously the preprocess mask used
         ``astype(str) != 'nan'`` which touched every cell."""
         df1 = pd.DataFrame({"n": [1, 2, 3], "s": ["A", "B", "C"]})
-        df2 = pd.DataFrame({"n": [1, 2, 3], "s": ["a", "b", "c"]})
         preprocessed = comp._preprocess_dataframe(df1, ignore_case=True)
         assert preprocessed["n"].dtype == df1["n"].dtype
         assert list(preprocessed["n"]) == [1, 2, 3]

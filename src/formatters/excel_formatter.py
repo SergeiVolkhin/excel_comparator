@@ -73,9 +73,7 @@ class ExcelOutputFormatter(IOutputFormatter):
             BasicDifferenceAnalyzer(),
         ]
 
-    def format(
-        self, result: ComparisonResult, output_path: Path, **options: Any
-    ) -> None:
+    def format(self, result: ComparisonResult, output_path: Path, **options: Any) -> None:
         """Форматирует и сохраняет результат сравнения в Excel"""
         try:
             self.logger.info(f"Создание Excel отчета: {output_path}")

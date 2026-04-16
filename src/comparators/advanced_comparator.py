@@ -26,9 +26,7 @@ class AdvancedComparator(IComparator):
         """Инициализирует улучшенный компаратор"""
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def compare(
-        self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
-    ) -> ComparisonResult:
+    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any) -> ComparisonResult:
         """
         Сравнивает два DataFrame и возвращает результат
 
@@ -209,12 +207,14 @@ class AdvancedComparator(IComparator):
             if len(df1_aligned) < max_rows:
                 # Используем reindex вместо создания пустых строк и конкатенации
                 df1_aligned = df1_aligned.reindex(
-                    range(max_rows), fill_value=pd.NA  # type: ignore[arg-type]
+                    range(max_rows),
+                    fill_value=pd.NA,  # type: ignore[arg-type]
                 )
 
             if len(df2_aligned) < max_rows:
                 df2_aligned = df2_aligned.reindex(
-                    range(max_rows), fill_value=pd.NA  # type: ignore[arg-type]
+                    range(max_rows),
+                    fill_value=pd.NA,  # type: ignore[arg-type]
                 )
 
             return df1_aligned, df2_aligned, column_stats, row_stats

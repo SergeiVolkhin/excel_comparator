@@ -137,9 +137,7 @@ class AppConfig(BaseModel):
     def load_config(self) -> None:
         """Загружает конфигурацию из файла"""
         if not self.config_path.exists():
-            self.logger.info(
-                "Файл конфигурации не найден, используются настройки по умолчанию"
-            )
+            self.logger.info("Файл конфигурации не найден, используются настройки по умолчанию")
             return
         try:
             config_data = self._read_config_file()

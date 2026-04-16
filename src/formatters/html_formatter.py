@@ -47,9 +47,7 @@ class HTMLOutputFormatter(IOutputFormatter):
         )
         self.enable_pagination = True
 
-    def format(
-        self, result: ComparisonResult, output_path: Path, **options: Any
-    ) -> None:
+    def format(self, result: ComparisonResult, output_path: Path, **options: Any) -> None:
         """Форматирует и сохраняет результат сравнения в HTML"""
         try:
             self.logger.info(f"Создание HTML отчета: {output_path}")
@@ -509,14 +507,14 @@ class HTMLOutputFormatter(IOutputFormatter):
             padding: 0;
             box-sizing: border-box;
         }}
-        
+
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
             line-height: 1.6;
             color: #333;
             background-color: #f5f5f5;
         }}
-        
+
         .container {{
             max-width: 1400px;
             margin: 0 auto;
@@ -524,7 +522,7 @@ class HTMLOutputFormatter(IOutputFormatter):
             background-color: white;
             min-height: 100vh;
         }}
-        
+
         header {{
             text-align: center;
             margin-bottom: 30px;
@@ -533,17 +531,17 @@ class HTMLOutputFormatter(IOutputFormatter):
             color: white;
             border-radius: 10px;
         }}
-        
+
         header h1 {{
             font-size: 2.5em;
             margin-bottom: 10px;
         }}
-        
+
         .timestamp {{
             opacity: 0.9;
             font-size: 0.9em;
         }}
-        
+
         section {{
             margin-bottom: 30px;
             padding: 20px;
@@ -551,25 +549,25 @@ class HTMLOutputFormatter(IOutputFormatter):
             border-radius: 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }}
-        
+
         h2 {{
             color: #4a5568;
             margin-bottom: 20px;
             font-size: 1.8em;
         }}
-        
+
         h3 {{
             color: #5a6c7d;
             margin-bottom: 15px;
             font-size: 1.3em;
         }}
-        
+
         .info-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
             gap: 15px;
         }}
-        
+
         .info-item {{
             display: flex;
             justify-content: space-between;
@@ -577,19 +575,19 @@ class HTMLOutputFormatter(IOutputFormatter):
             background-color: #f8f9fa;
             border-radius: 5px;
         }}
-        
+
         .info-item label {{
             font-weight: bold;
             color: #495057;
         }}
-        
+
         .stats-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }}
-        
+
         .stat-card {{
             text-align: center;
             padding: 20px;
@@ -598,34 +596,34 @@ class HTMLOutputFormatter(IOutputFormatter):
             border-radius: 10px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.1);
         }}
-        
+
         .stat-card.similarity-high {{
             background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
         }}
-        
+
         .stat-card.similarity-medium {{
             background: linear-gradient(135deg, #fdcb6e 0%, #e17055 100%);
         }}
-        
+
         .stat-card.similarity-low {{
             background: linear-gradient(135deg, #fd79a8 0%, #e84393 100%);
         }}
-        
+
         .stat-value {{
             font-size: 2.5em;
             font-weight: bold;
             margin-bottom: 5px;
         }}
-        
+
         .stat-label {{
             font-size: 0.9em;
             opacity: 0.9;
         }}
-        
+
         .column-stats {{
             margin-top: 20px;
         }}
-        
+
         .column-stat {{
             display: flex;
             align-items: center;
@@ -634,18 +632,18 @@ class HTMLOutputFormatter(IOutputFormatter):
             background-color: #f8f9fa;
             border-radius: 5px;
         }}
-        
+
         .column-name {{
             flex: 1;
             font-weight: bold;
             color: #495057;
         }}
-        
+
         .column-count {{
             margin-right: 10px;
             color: #6c757d;
         }}
-        
+
         .progress-bar {{
             width: 100px;
             height: 8px;
@@ -653,36 +651,36 @@ class HTMLOutputFormatter(IOutputFormatter):
             border-radius: 4px;
             overflow: hidden;
         }}
-        
+
         .progress-fill {{
             height: 100%;
             background: linear-gradient(90deg, #fd79a8, #e84393);
             transition: width 0.3s ease;
         }}
-        
+
         .tables-container {{
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 20px;
         }}
-        
+
         @media (max-width: 1200px) {{
             .tables-container {{
                 grid-template-columns: 1fr;
             }}
         }}
-        
+
         .table-wrapper {{
             background-color: #f8f9fa;
             border-radius: 8px;
             padding: 15px;
         }}
-        
+
         .data-table h3 {{
             margin-bottom: 10px;
             color: #495057;
         }}
-        
+
         .truncated-note {{
             color: #856404;
             background-color: #fff3cd;
@@ -691,40 +689,40 @@ class HTMLOutputFormatter(IOutputFormatter):
             margin-bottom: 10px;
             font-size: 0.9em;
         }}
-        
+
         .table-scroll {{
             overflow-x: auto;
             max-height: 600px;
             overflow-y: auto;
             border: 1px solid #dee2e6;
         }}
-        
+
         table {{
             width: 100%;
             border-collapse: collapse;
             font-size: 0.9em;
         }}
-        
+
         thead {{
             position: sticky;
             top: 0;
             background-color: #f8f9fa;
             z-index: 10;
         }}
-        
+
         th, td {{
             padding: 8px 12px;
             text-align: left;
             border-bottom: 1px solid #dee2e6;
         }}
-        
+
         th {{
             background-color: #e9ecef;
             color: #495057;
             font-weight: bold;
             user-select: none;
         }}
-        
+
         .row-index {{
             font-weight: bold;
             background-color: #f8f9fa;
@@ -732,28 +730,28 @@ class HTMLOutputFormatter(IOutputFormatter):
             left: 0;
             z-index: 5;
         }}
-        
+
         td.different {{
             background-color: #{self.highlight_color};
         }}
-        
+
         .null-value {{
             color: #6c757d;
             font-style: italic;
         }}
-        
+
         footer {{
             text-align: center;
             padding: 20px;
             color: #6c757d;
             font-size: 0.9em;
         }}
-        
+
         /* Стили для пагинации */
         .pagination {{
             text-align: center;
         }}
-        
+
         .pagination-links {{
             display: flex;
             flex-wrap: wrap;
@@ -761,7 +759,7 @@ class HTMLOutputFormatter(IOutputFormatter):
             gap: 10px;
             margin-top: 20px;
         }}
-        
+
         .page-link {{
             display: inline-block;
             padding: 8px 15px;
@@ -771,13 +769,13 @@ class HTMLOutputFormatter(IOutputFormatter):
             border-radius: 5px;
             transition: all 0.3s ease;
         }}
-        
+
         .page-link:hover {{
             background-color: #e9ecef;
             transform: translateY(-2px);
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }}
-        
+
         .page-info {{
             background-color: #e9ecef;
             padding: 10px;
@@ -785,14 +783,14 @@ class HTMLOutputFormatter(IOutputFormatter):
             border-radius: 5px;
             text-align: center;
         }}
-        
+
         .page-navigation {{
             display: flex;
             justify-content: center;
             gap: 20px;
             margin: 20px 0;
         }}
-        
+
         .nav-link {{
             display: inline-block;
             padding: 10px 20px;
@@ -802,7 +800,7 @@ class HTMLOutputFormatter(IOutputFormatter):
             border-radius: 5px;
             transition: all 0.3s ease;
         }}
-        
+
         .nav-link:hover {{
             background-color: #5341d6;
             transform: translateY(-2px);

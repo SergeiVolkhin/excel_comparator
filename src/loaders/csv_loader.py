@@ -147,9 +147,7 @@ class CSVFileLoader(IFileLoader):
                 best_sep, best_score = sep, value
         return best_sep
 
-    def _prepare_load_params(
-        self, separator: str, encoding: str, **kwargs: Any
-    ) -> dict[str, Any]:
+    def _prepare_load_params(self, separator: str, encoding: str, **kwargs: Any) -> dict[str, Any]:
         """Подготавливает параметры для загрузки pandas.read_csv"""
 
         params: dict[str, Any] = {
@@ -198,9 +196,7 @@ class CSVFileLoader(IFileLoader):
 
         return params
 
-    def preview_data(
-        self, file_path: Path, max_rows: int = 5, **kwargs: Any
-    ) -> pd.DataFrame:
+    def preview_data(self, file_path: Path, max_rows: int = 5, **kwargs: Any) -> pd.DataFrame:
         """Предварительный просмотр CSV данных"""
         try:
             encoding = self._detect_encoding(file_path)

@@ -49,17 +49,17 @@ class ComparisonEngine:
 graph TB
     IFileLoader --> |implements| ExcelFileLoader
     IFileLoader --> |implements| CSVFileLoader
-    
+
     IComparator --> |implements| BasicComparator
     IComparator --> |implements| FuzzyComparator
     IComparator --> |implements| NumericComparator
-    
+
     IOutputFormatter --> |implements| ExcelOutputFormatter
     IOutputFormatter --> |implements| HTMLOutputFormatter
-    
+
     IValidationRule --> |implements| ShapeValidationRule
     IValidationRule --> |implements| ColumnNamesValidationRule
-    
+
     IDifferenceAnalyzer --> |implements| ListDifferenceAnalyzer
     IDifferenceAnalyzer --> |implements| BasicDifferenceAnalyzer
 ```
@@ -69,26 +69,26 @@ graph TB
 ```python
 class ComparisonEngine:
     """Центральный компонент, координирующий работу всей системы"""
-    
+
     def compare_files(self, file1: Path, file2: Path, output: Path, **options):
         # 1. Найти подходящий загрузчик
         loader = self._find_file_loader(file1)
-        
+
         # 2. Загрузить данные
         df1 = loader.load(file1)
         df2 = loader.load(file2)
-        
+
         # 3. Валидировать данные
         self._validate_data(df1, df2)
-        
+
         # 4. Выполнить сравнение
         comparator = self._get_comparator(options.get('comparator', 'basic'))
         result = comparator.compare(df1, df2, **options)
-        
+
         # 5. Отформатировать результат
         formatter = self._get_formatter(options.get('format', 'excel'))
         formatter.format(result, output, **options)
-        
+
         return result
 ```
 
@@ -141,7 +141,7 @@ sequenceDiagram
     participant Comparator
     participant Analyzer
     participant Formatter
-    
+
     GUI->>Engine: compare_files()
     Engine->>Loader: load(file1), load(file2)
     Loader-->>Engine: DataFrame1, DataFrame2
@@ -278,7 +278,7 @@ class PluginManager:
     def load_plugin(self, plugin_path: Path):
         # Динамическая загрузка плагинов
         pass
-    
+
     def register_plugin_components(self, plugin):
         # Автоматическая регистрация компонентов плагина
         pass
@@ -301,7 +301,7 @@ async def compare_files(file1: UploadFile, file2: UploadFile):
 class MLComparator(IComparator):
     def __init__(self, model_path: Path):
         self.model = load_model(model_path)
-    
+
     def compare(self, df1, df2, **options):
         # Использование ML для анализа различий
         pass
@@ -315,24 +315,24 @@ class MLComparator(IComparator):
 class IComparator(ABC):
     """
     Интерфейс для сравнения данных.
-    
+
     Компараторы должны реализовывать этот интерфейс для обеспечения
     единообразного API сравнения различных типов данных.
     """
-    
+
     @abstractmethod
     def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options) -> ComparisonResult:
         """
         Сравнивает два DataFrame и возвращает результат.
-        
+
         Args:
             df1: Первый DataFrame для сравнения
             df2: Второй DataFrame для сравнения
             **options: Дополнительные опции сравнения
-            
+
         Returns:
             ComparisonResult: Результат сравнения с метаданными
-            
+
         Raises:
             ComparisonError: При ошибке в процессе сравнения
         """

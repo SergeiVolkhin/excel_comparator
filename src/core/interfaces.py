@@ -55,9 +55,7 @@ class IComparator(ABC):
     """Интерфейс для сравнения данных"""
 
     @abstractmethod
-    def compare(
-        self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
-    ) -> ComparisonResult:
+    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any) -> ComparisonResult:
         """Сравнивает два DataFrame и возвращает результат"""
         pass
 
@@ -85,9 +83,7 @@ class IOutputFormatter(ABC):
     """Интерфейс для форматирования вывода"""
 
     @abstractmethod
-    def format(
-        self, result: ComparisonResult, output_path: Path, **options: Any
-    ) -> None:
+    def format(self, result: ComparisonResult, output_path: Path, **options: Any) -> None:
         """Форматирует и сохраняет результат сравнения"""
         pass
 
