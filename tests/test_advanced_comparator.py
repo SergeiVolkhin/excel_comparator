@@ -81,3 +81,25 @@ class TestSummary:
 
 def test_get_name(comp: AdvancedComparator) -> None:
     assert comp.get_name() == "Улучшенное сравнение"
+
+
+class TestPreprocess:
+    def test_ignore_case(self, comp: AdvancedComparator) -> None:
+        df1 = pd.DataFrame({"x": ["ABC"]})
+        df2 = pd.DataFrame({"x": ["abc"]})
+        result = comp.compare(df1, df2, ignore_case=True)
+        assert result.differences_mask.sum().sum() == 0
+
+    def test_ignore_whitespace(self, comp: AdvancedComparator) -> None:
+        df1 = pd.DataFrame({"x": [" abc "]})
+        df2 = pd.DataFrame({"x": ["abc"]})
+        result = comp.compare(df1, df2, ignore_whitespace=True)
+        assert result.differences_mask.sum().sum() == 0
+
+
+class TestEmptyAligned:
+    def test_zero_rows_after_alignment(self, comp: AdvancedComparator) -> None:
+        df1 = pd.DataFrame({"a": []})
+        df2 = pd.DataFrame({"a": []})
+        result = comp.compare(df1, df2)
+        assert result.metadata["similarity_percentage"] == 0.0

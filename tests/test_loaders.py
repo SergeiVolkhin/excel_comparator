@@ -68,6 +68,33 @@ class TestExcelLoaderLoad:
         sheets = excel_loader.get_sheet_names(a)
         assert set(sheets) == {"Main", "Extra"}
 
+    def test_get_sheet_names_bad_file_returns_empty(
+        self, excel_loader: ExcelFileLoader, tmp_path: Path
+    ) -> None:
+        bad = tmp_path / "bad.xlsx"
+        bad.write_bytes(b"not-an-xlsx")
+        assert excel_loader.get_sheet_names(bad) == []
+
+    def test_preview_bad_file_returns_empty_df(
+        self, excel_loader: ExcelFileLoader, tmp_path: Path
+    ) -> None:
+        bad = tmp_path / "bad.xlsx"
+        bad.write_bytes(b"not-an-xlsx")
+        df = excel_loader.preview_data(bad)
+        assert df.empty
+
+    def test_load_empty_xlsx_raises(
+        self, excel_loader: ExcelFileLoader, tmp_path: Path
+    ) -> None:
+        # Produce an xlsx with zero data rows
+        import pandas as pd
+        empty = pd.DataFrame({"a": []})
+        p = tmp_path / "empty.xlsx"
+        with pd.ExcelWriter(p, engine="openpyxl") as w:
+            empty.to_excel(w, index=False)
+        with pytest.raises(FileLoadError):
+            excel_loader.load(p)
+
 
 # ---------------------------------------------------------------------------
 # CSV loader
@@ -96,3 +123,54 @@ class TestCSVLoader:
     def test_missing_file_raises(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
         with pytest.raises(FileLoadError):
             csv_loader.load(tmp_path / "nope.csv")
+
+    def test_bad_extension_raises(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "a.xlsx"
+        f.write_bytes(b"")
+        with pytest.raises(FileLoadError, match="расширение"):
+            csv_loader.load(f)
+
+    def test_load_semicolon_separator(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "a.csv"
+        f.write_text("id;name\n1;Alice\n2;Bob\n", encoding="utf-8")
+        df = csv_loader.load(f, sep=";")
+        assert list(df.columns) == ["id", "name"]
+        assert len(df) == 2
+
+    def test_load_tsv(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "a.tsv"
+        f.write_text("id\tname\n1\tAlice\n2\tBob\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert len(df) == 2
+
+    def test_load_explicit_separator(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "a.csv"
+        f.write_text("id|name\n1|Alice\n", encoding="utf-8")
+        df = csv_loader.load(f, sep="|")
+        assert len(df) == 1
+
+    def test_analyze_file_structure(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n2,B\n", encoding="utf-8")
+        analysis = csv_loader.analyze_file_structure(f)
+        assert analysis["columns"] == 2
+        assert analysis["total_rows"] == 2
+        assert "encoding" in analysis
+
+    def test_preview(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n2,B\n3,C\n", encoding="utf-8")
+        df = csv_loader.preview_data(f, max_rows=2)
+        assert len(df) == 2
+
+    def test_supported_extensions(self, csv_loader: CSVFileLoader) -> None:
+        assert set(csv_loader.get_supported_extensions()) == {".csv", ".txt", ".tsv"}
+
+
+class TestExcelLoaderPreview:
+    def test_preview(
+        self, excel_loader: ExcelFileLoader, identical_xlsx_pair: tuple[Path, Path]
+    ) -> None:
+        a, _ = identical_xlsx_pair
+        df = excel_loader.preview_data(a, max_rows=2)
+        assert len(df) == 2

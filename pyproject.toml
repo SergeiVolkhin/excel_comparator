@@ -67,6 +67,9 @@ filterwarnings = [
     # here so characterization tests can freeze current behavior first.
     "ignore::FutureWarning:pandas.*",
     "ignore::FutureWarning:src.comparators.*",
+    # TODO(fix): pd.ExcelFile not closed in ExcelFileLoader.get_sheet_names.
+    # Tracked in TODO_bugs.md, fixed separately.
+    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
     "slow: smoke/perf tests on large generated files",
@@ -79,7 +82,11 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["src"]
-omit = ["src/gui/*", "*/__init__.py"]
+omit = [
+    "src/gui/*",
+    "*/__init__.py",
+    "src/core/interfaces.py",  # abstract method stubs / Protocols
+]
 
 [tool.coverage.report]
 show_missing = true
