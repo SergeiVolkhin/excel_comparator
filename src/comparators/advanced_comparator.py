@@ -25,7 +25,6 @@ class AdvancedComparator(IComparator):
     def __init__(self) -> None:
         """Инициализирует улучшенный компаратор"""
         self.logger = logging.getLogger(self.__class__.__name__)
-        self._na_marker = object()  # Уникальный объект для обозначения NaN
 
     def compare(
         self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
@@ -61,9 +60,7 @@ class AdvancedComparator(IComparator):
         processed_df2 = preprocess_dataframe(aligned_df2, ignore_case, ignore_whitespace)
 
         # Создание маски различий
-        differences_mask = build_differences_mask(
-            processed_df1, processed_df2, self._na_marker
-        )
+        differences_mask = build_differences_mask(processed_df1, processed_df2)
 
         # Подсчет статистики
         total_cells = aligned_df1.size
@@ -222,7 +219,7 @@ class AdvancedComparator(IComparator):
         return preprocess_dataframe(df, ignore_case, ignore_whitespace)
 
     def _create_differences_mask(self, df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
-        return build_differences_mask(df1, df2, self._na_marker)
+        return build_differences_mask(df1, df2)
 
     def get_differences_summary(self, result: ComparisonResult) -> dict[str, Any]:
         """

@@ -13,14 +13,17 @@ into refactor work.
   `load_workbook(read_only=True)` with try/finally close; .xls path
   uses `pd.ExcelFile` in a `with`-block.
 
-## 2. `BasicComparator._create_differences_mask` — pandas FutureWarning on `fillna(object_sentinel)`
+## 2. `BasicComparator._create_differences_mask` — pandas FutureWarning on `fillna(object_sentinel)`  ✅ FIXED
 - File: `src/comparators/basic_comparator.py:108-109`
        and `src/comparators/advanced_comparator.py:250-251`
 - Symptom: `FutureWarning: Downcasting object dtype arrays on .fillna ...`
   on modern pandas; becomes `TypeError` on future pandas.
-- Fix: replace object-sentinel pattern with
-  `df1.eq(df2) | (df1.isna() & df2.isna())` vectorised equality,
-  or `infer_objects(copy=False)` as interim mitigation.
+- Fix applied: `build_differences_mask` in `src/comparators/_shared.py`
+  now computes `(df1.values != df2.values) & ~(df1.isna() & df2.isna())`
+  — NaN-safe without any sentinel. `_na_marker` attribute removed
+  from both comparators. Regression test added in
+  `tests/test_basic_comparator.py::test_no_future_warning_on_object_columns`.
+  pytest `filterwarnings = ["error"]` (no pandas suppressions).
 
 ## 3. `BasicComparator._preprocess_dataframe` — chained `astype(str)` on numeric dtypes
 - File: `src/comparators/basic_comparator.py:95-101`

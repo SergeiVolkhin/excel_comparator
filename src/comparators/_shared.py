@@ -38,16 +38,18 @@ def preprocess_dataframe(
 
 
 def build_differences_mask(
-    df1: pd.DataFrame, df2: pd.DataFrame, na_marker: object
+    df1: pd.DataFrame, df2: pd.DataFrame, na_marker: object | None = None
 ) -> pd.DataFrame:
     """Build a boolean DataFrame indicating cell-by-cell differences.
 
-    TODO(fix, TODO_bugs.md #2): the object-sentinel fillna pattern emits a
-    pandas FutureWarning on modern pandas; replace with
-    ``df1.eq(df2) | (df1.isna() & df2.isna())`` once characterization
-    tests are extended to cover edge cases.
+    NaN vs NaN is treated as equal (not a difference), matching the
+    original object-sentinel behaviour without triggering pandas'
+    FutureWarning from ``fillna(object_sentinel)``. The ``na_marker``
+    parameter is accepted but ignored; kept for backward compatibility
+    with callers that passed the old sentinel.
     """
-    df1_filled = df1.fillna(na_marker)  # type: ignore[arg-type]
-    df2_filled = df2.fillna(na_marker)  # type: ignore[arg-type]
-    mask = df1_filled.values != df2_filled.values
-    return pd.DataFrame(mask, columns=df1.columns, index=df1.index)
+    del na_marker  # legacy API param; no longer needed
+    both_na = df1.isna().values & df2.isna().values
+    values_differ = df1.values != df2.values
+    mask_values = values_differ & ~both_na
+    return pd.DataFrame(mask_values, columns=df1.columns, index=df1.index)
