@@ -87,11 +87,6 @@ class TestCSVvsCSV:
     def test_identical_tab_on_csv_extension(
         self, engine_with_csv: ComparisonEngine, csv_dir: Path
     ) -> None:
-        # Bug B1 (tab-delim on .csv auto-detect) doesn't surface here because
-        # both files misparse identically — similarity stays at 100%. The real
-        # B1 assertion lives in
-        # tests/test_loaders.py::TestCSVLoaderDelimiterDetection::
-        # test_auto_detect_tab_on_csv_extension, which pins the column layout.
         a = _write_csv(csv_dir / "a.csv", _base_df(), sep="\t")
         b = _write_csv(csv_dir / "b.csv", _base_df(), sep="\t")
         result = engine_with_csv.compare_files(a, b, csv_dir / "r.xlsx")
