@@ -151,13 +151,15 @@ class ExcelOutputFormatter(IOutputFormatter):
             cell.alignment = self.center_align
             cell.border = self.thin_border
 
-        # Применяем подсветку к различающимся ячейкам
-        for row_pos, (_, row) in enumerate(mask.iterrows()):
-            for col_idx, is_different in enumerate(row):
-                if is_different:
-                    cell = worksheet.cell(row=row_pos + 2, column=col_idx + 1)
-                    cell.fill = self.highlight_fill
-                    cell.border = self.thin_border
+        # Применяем подсветку только к различающимся ячейкам.
+        # Векторизация: numpy.nonzero возвращает позиции диффов одним проходом,
+        # поэтому стоимость линейна от количества различий, а не от размера
+        # таблицы. Это критично для больших листов с редкими изменениями.
+        diff_rows, diff_cols = mask.values.nonzero()
+        for row_pos, col_idx in zip(diff_rows, diff_cols, strict=True):
+            cell = worksheet.cell(row=int(row_pos) + 2, column=int(col_idx) + 1)
+            cell.fill = self.highlight_fill
+            cell.border = self.thin_border
 
         # Автоподбор ширины столбцов
         self._auto_adjust_columns(worksheet)
@@ -165,32 +167,34 @@ class ExcelOutputFormatter(IOutputFormatter):
     def _create_differences_column(
         self, base_df: pd.DataFrame, other_df: pd.DataFrame, mask: pd.DataFrame
     ) -> pd.Series:
-        """Создает столбец с описанием различий"""
-        differences = []
+        """Создает столбец с описанием различий.
 
-        for idx in base_df.index:
-            row_differences = []
+        Iterates only over diff positions (via ``mask.values.nonzero``)
+        instead of the full ``rows × cols`` grid. For sparse differences
+        this is roughly O(diffs) vs the previous O(rows × cols).
+        """
+        cols = list(base_df.columns)
+        base_values = base_df.values
+        other_values = other_df.values
+        diff_rows, diff_cols = mask.values.nonzero()
 
-            for col in base_df.columns:
-                if not mask.at[idx, col]:
-                    continue
+        by_row: dict[int, list[str]] = {}
+        for r, c in zip(diff_rows, diff_cols, strict=True):
+            col_name = cols[c]
+            old_value = base_values[r, c]
+            new_value = other_values[r, c]
+            analyzer = self._find_analyzer(old_value, new_value)
+            try:
+                detail = analyzer.analyze(old_value, new_value, col_name)
+                message = f"{col_name}: {detail.description}"
+            except Exception as e:
+                self.logger.warning(f"Ошибка анализа различий для {col_name}: {e}")
+                message = f"{col_name}: {old_value} → {new_value}"
+            by_row.setdefault(int(r), []).append(message)
 
-                old_value = base_df.at[idx, col]
-                new_value = other_df.at[idx, col]
-
-                # Находим подходящий анализатор
-                analyzer = self._find_analyzer(old_value, new_value)
-
-                try:
-                    detail = analyzer.analyze(old_value, new_value, col)
-                    row_differences.append(f"{col}: {detail.description}")
-                except Exception as e:
-                    self.logger.warning(f"Ошибка анализа различий для {col}: {e}")
-                    row_differences.append(f"{col}: {old_value} → {new_value}")
-
-            differences.append(" | ".join(row_differences))
-
-        return pd.Series(differences, index=base_df.index, name="Различия")
+        n_rows = len(base_df)
+        descriptions = [" | ".join(by_row.get(i, [])) for i in range(n_rows)]
+        return pd.Series(descriptions, index=base_df.index, name="Различия")
 
     def _find_analyzer(self, old_value: Any, new_value: Any) -> IDifferenceAnalyzer:
         """Находит подходящий анализатор для значений"""
