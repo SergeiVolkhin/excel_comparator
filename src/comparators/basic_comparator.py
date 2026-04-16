@@ -9,6 +9,7 @@ import pandas as pd
 
 from ..core.exceptions import ComparisonError
 from ..core.interfaces import ComparisonResult, IComparator
+from ._shared import build_differences_mask, preprocess_dataframe
 
 
 class BasicComparator(IComparator):
@@ -33,11 +34,13 @@ class BasicComparator(IComparator):
         self.logger.info(f"Начало сравнения DataFrames {df1.shape} vs {df2.shape}")
 
         # Предобработка данных
-        processed_df1 = self._preprocess_dataframe(df1, ignore_case, ignore_whitespace)
-        processed_df2 = self._preprocess_dataframe(df2, ignore_case, ignore_whitespace)
+        processed_df1 = preprocess_dataframe(df1, ignore_case, ignore_whitespace)
+        processed_df2 = preprocess_dataframe(df2, ignore_case, ignore_whitespace)
 
         # Создание маски различий
-        differences_mask = self._create_differences_mask(processed_df1, processed_df2)
+        differences_mask = build_differences_mask(
+            processed_df1, processed_df2, self._na_marker
+        )
 
         # Подсчет статистики
         total_cells = df1.size
@@ -78,39 +81,15 @@ class BasicComparator(IComparator):
         if df1.empty or df2.empty:
             raise ComparisonError("Один из DataFrames пустой")
 
+    # Back-compat wrappers (kept so tests that hit private methods still
+    # work; the actual logic now lives in comparators._shared).
     def _preprocess_dataframe(
         self, df: pd.DataFrame, ignore_case: bool = False, ignore_whitespace: bool = False
     ) -> pd.DataFrame:
-        """Предобрабатывает DataFrame для сравнения"""
-        result_df = df.copy()
-
-        if ignore_case or ignore_whitespace:
-            # Применяем обработку только к строковым столбцам
-            for col in result_df.columns:
-                if result_df[col].dtype == "object":
-                    # Обрабатываем только строковые значения
-                    mask = result_df[col].astype(str) != "nan"
-
-                    if ignore_case:
-                        result_df.loc[mask, col] = result_df.loc[mask, col].astype(str).str.lower()
-
-                    if ignore_whitespace:
-                        result_df.loc[mask, col] = result_df.loc[mask, col].astype(str).str.strip()
-
-        return result_df
+        return preprocess_dataframe(df, ignore_case, ignore_whitespace)
 
     def _create_differences_mask(self, df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
-        """Создает маску различий между двумя DataFrames"""
-        # Заменяем NaN на уникальный маркер для корректного сравнения.
-        # TODO(fix, TODO_bugs.md #2): object-sentinel pattern emits pandas
-        # FutureWarning; replace with `.eq(..) | (.isna() & ..isna())`.
-        df1_filled = df1.fillna(self._na_marker)  # type: ignore[arg-type]
-        df2_filled = df2.fillna(self._na_marker)  # type: ignore[arg-type]
-
-        # Создаем маску различий
-        differences_mask = df1_filled.values != df2_filled.values
-
-        return pd.DataFrame(differences_mask, columns=df1.columns, index=df1.index)
+        return build_differences_mask(df1, df2, self._na_marker)
 
     def get_differences_summary(self, result: ComparisonResult) -> dict[str, Any]:
         """Возвращает сводку различий"""
