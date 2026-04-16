@@ -54,3 +54,17 @@ class TestHTMLFormatter:
     def test_supported_formats(self) -> None:
         fmts = HTMLOutputFormatter().get_supported_formats()
         assert ".html" in fmts or ".htm" in fmts
+
+    def test_paginated_report(self, tmp_path: Path) -> None:
+        # Force pagination by lowering the page_size to a tiny value.
+        formatter = HTMLOutputFormatter()
+        formatter.page_size = 10
+        df1 = pd.DataFrame({"a": list(range(25))})
+        df2 = pd.DataFrame({"a": list(range(25))})
+        result = BasicComparator().compare(df1, df2)
+        out = tmp_path / "r.html"
+        formatter.format(result, out, file1_name="A", file2_name="B")
+        # Pagination creates sibling page_*.html files
+        pages = list(tmp_path.glob("r_page_*.html"))
+        assert len(pages) >= 2
+        assert out.exists()
