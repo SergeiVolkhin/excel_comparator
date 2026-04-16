@@ -474,9 +474,7 @@ class TestCSVLoaderChunkedPath:
         assert len(df) == 2
 
     @pytest.mark.slow
-    def test_chunked_path_on_120mb_file(
-        self, csv_loader: CSVFileLoader, tmp_path: Path
-    ) -> None:
+    def test_chunked_path_on_120mb_file(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
         import pandas as pd
 
         # Generate a CSV that comfortably exceeds the 100 MB threshold.
