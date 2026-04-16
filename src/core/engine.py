@@ -13,8 +13,10 @@ if TYPE_CHECKING:
 
 from ..comparators.advanced_comparator import AdvancedComparator
 from ..comparators.basic_comparator import BasicComparator
+from ..formatters.csv_formatter import CSVOutputFormatter
 from ..formatters.excel_formatter import ExcelOutputFormatter
 from ..formatters.html_formatter import HTMLOutputFormatter
+from ..loaders.csv_loader import CSVFileLoader
 from ..loaders.excel_loader import ExcelFileLoader
 from .exceptions import ApplicationError, UnsupportedFormatError, ValidationError
 from .interfaces import (
@@ -48,6 +50,7 @@ class ComparisonEngine:
         """Регистрирует компоненты по умолчанию"""
         # Загрузчики файлов
         self.register_file_loader(ExcelFileLoader())
+        self.register_file_loader(CSVFileLoader())
 
         # Компараторы
         self.register_comparator("basic", BasicComparator())
@@ -56,6 +59,7 @@ class ComparisonEngine:
         # Форматтеры
         self.register_formatter("excel", ExcelOutputFormatter(self.config))
         self.register_formatter("html", HTMLOutputFormatter(self.config))
+        self.register_formatter("csv", CSVOutputFormatter(self.config))
 
     def register_file_loader(self, loader: IFileLoader) -> None:
         """Регистрирует загрузчик файлов"""
@@ -100,6 +104,8 @@ class ComparisonEngine:
             return "excel"
         elif suffix in [".html", ".htm"]:
             return "html"
+        elif suffix == ".csv":
+            return "csv"
         else:
             # По умолчанию используем Excel
             return "excel"
