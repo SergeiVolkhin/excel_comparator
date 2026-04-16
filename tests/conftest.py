@@ -40,6 +40,28 @@ def _write_raw_xlsx(path: Path, sheets: dict[str, list[list[Any]]]) -> Path:
     return path
 
 
+def _write_csv(
+    path: Path,
+    df: pd.DataFrame,
+    *,
+    sep: str = ",",
+    encoding: str = "utf-8",
+    lineterminator: str = "\n",
+) -> Path:
+    """Serialise a DataFrame to CSV with explicit control over delimiter,
+    encoding, and line terminator. Falls back through pandas to keep the
+    writer stable across test runs (unlike csv.writer which would require
+    us to reimplement NA handling)."""
+    df.to_csv(
+        path,
+        sep=sep,
+        encoding=encoding,
+        lineterminator=lineterminator,
+        index=False,
+    )
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Snapshot helper
 # ---------------------------------------------------------------------------
@@ -109,6 +131,28 @@ def xlsx_dir(tmp_path: Path) -> Path:
     d = tmp_path / "xlsx"
     d.mkdir()
     return d
+
+
+@pytest.fixture
+def csv_dir(tmp_path: Path) -> Path:
+    d = tmp_path / "csv"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def identical_csv_pair(csv_dir: Path) -> tuple[Path, Path]:
+    df = _df_base()
+    a = _write_csv(csv_dir / "a.csv", df)
+    b = _write_csv(csv_dir / "b.csv", df)
+    return a, b
+
+
+@pytest.fixture
+def value_diff_csv_pair(csv_dir: Path) -> tuple[Path, Path]:
+    a = _write_csv(csv_dir / "a.csv", _df_base())
+    b = _write_csv(csv_dir / "b.csv", _df_value_diff())
+    return a, b
 
 
 @pytest.fixture
