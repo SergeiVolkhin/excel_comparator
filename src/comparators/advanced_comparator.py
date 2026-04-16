@@ -21,12 +21,14 @@ class AdvancedComparator(IComparator):
     - Эффективно обрабатывать большие файлы благодаря оптимизированным алгоритмам
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализирует улучшенный компаратор"""
         self.logger = logging.getLogger(self.__class__.__name__)
         self._na_marker = object()  # Уникальный объект для обозначения NaN
 
-    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options) -> ComparisonResult:
+    def compare(
+        self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
+    ) -> ComparisonResult:
         """
         Сравнивает два DataFrame и возвращает результат
 
@@ -96,8 +98,11 @@ class AdvancedComparator(IComparator):
         return "Улучшенное сравнение"
 
     def align_dataframes(
-        self, df1: pd.DataFrame, df2: pd.DataFrame, key_columns: list | None = None
-    ) -> tuple[pd.DataFrame, pd.DataFrame, dict, dict]:
+        self,
+        df1: pd.DataFrame,
+        df2: pd.DataFrame,
+        key_columns: list[str] | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any], dict[str, Any]]:
         """
         Выравнивает DataFrames для сравнения, поддерживая разные размеры
 
@@ -116,7 +121,11 @@ class AdvancedComparator(IComparator):
         self.logger.info("Выравнивание DataFrames для сравнения")
 
         # Статистика по столбцам и строкам
-        column_stats = {"only_in_df1": [], "only_in_df2": [], "common": []}
+        column_stats: dict[str, list[str]] = {
+            "only_in_df1": [],
+            "only_in_df2": [],
+            "common": [],
+        }
 
         row_stats = {
             "df1_rows": len(df1),
@@ -192,10 +201,14 @@ class AdvancedComparator(IComparator):
             # Оптимизированное расширение DataFrames до общего размера
             if len(df1_aligned) < max_rows:
                 # Используем reindex вместо создания пустых строк и конкатенации
-                df1_aligned = df1_aligned.reindex(range(max_rows), fill_value=pd.NA)
+                df1_aligned = df1_aligned.reindex(
+                    range(max_rows), fill_value=pd.NA  # type: ignore[arg-type]
+                )
 
             if len(df2_aligned) < max_rows:
-                df2_aligned = df2_aligned.reindex(range(max_rows), fill_value=pd.NA)
+                df2_aligned = df2_aligned.reindex(
+                    range(max_rows), fill_value=pd.NA  # type: ignore[arg-type]
+                )
 
             return df1_aligned, df2_aligned, column_stats, row_stats
 
@@ -245,9 +258,11 @@ class AdvancedComparator(IComparator):
         Returns:
             pd.DataFrame: Маска различий
         """
-        # Заменяем NaN на уникальный маркер для корректного сравнения
-        df1_filled = df1.fillna(self._na_marker)
-        df2_filled = df2.fillna(self._na_marker)
+        # Заменяем NaN на уникальный маркер для корректного сравнения.
+        # TODO(fix, TODO_bugs.md #2): same FutureWarning pattern as
+        # BasicComparator._create_differences_mask.
+        df1_filled = df1.fillna(self._na_marker)  # type: ignore[arg-type]
+        df2_filled = df2.fillna(self._na_marker)  # type: ignore[arg-type]
 
         # Создаем маску различий
         differences_mask = pd.DataFrame(

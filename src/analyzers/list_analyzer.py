@@ -233,7 +233,7 @@ class BasicDifferenceAnalyzer(IDifferenceAnalyzer):
     когда специализированные анализаторы не применимы.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализирует базовый анализатор различий"""
         self.logger = logging.getLogger(self.__class__.__name__)
 

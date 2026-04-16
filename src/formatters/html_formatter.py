@@ -21,7 +21,7 @@ class HTMLOutputFormatter(IOutputFormatter):
 
     SUPPORTED_FORMATS: ClassVar[list[str]] = [".html", ".htm"]
 
-    def __init__(self, config=None):
+    def __init__(self, config: Any = None) -> None:
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -36,7 +36,9 @@ class HTMLOutputFormatter(IOutputFormatter):
         )
         self.enable_pagination = True
 
-    def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
+    def format(
+        self, result: ComparisonResult, output_path: Path, **options: Any
+    ) -> None:
         """Форматирует и сохраняет результат сравнения в HTML"""
         try:
             self.logger.info(f"Создание HTML отчета: {output_path}")

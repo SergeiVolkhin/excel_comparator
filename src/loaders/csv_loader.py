@@ -4,7 +4,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import chardet
 import pandas as pd
@@ -18,14 +18,14 @@ class CSVFileLoader(IFileLoader):
 
     SUPPORTED_EXTENSIONS: ClassVar[list[str]] = [".csv", ".txt", ".tsv"]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def can_load(self, file_path: Path) -> bool:
         """Проверяет, может ли загрузчик обработать данный файл"""
         return file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS
 
-    def load(self, file_path: Path, **kwargs) -> pd.DataFrame:
+    def load(self, file_path: Path, **kwargs: Any) -> pd.DataFrame:
         """Загружает CSV файл с автоопределением параметров"""
 
         if not file_path.exists():
@@ -52,7 +52,7 @@ class CSVFileLoader(IFileLoader):
             self.logger.info(f"Загрузка CSV файла: {file_path}")
 
             # Загружаем файл
-            df = pd.read_csv(file_path, **load_params)
+            df = cast(pd.DataFrame, pd.read_csv(file_path, **load_params))
 
             self.logger.info(f"Успешно загружен CSV файл {file_path.name}: {df.shape}")
 
@@ -83,8 +83,8 @@ class CSVFileLoader(IFileLoader):
                 raw_data = f.read(10000)  # Читаем первые 10KB
 
             result = chardet.detect(raw_data)
-            encoding = result["encoding"]
-            confidence = result["confidence"]
+            encoding = result["encoding"] or "utf-8"
+            confidence = result["confidence"] or 0.0
 
             self.logger.debug(f"Определена кодировка {encoding} с уверенностью {confidence}")
 
@@ -101,12 +101,12 @@ class CSVFileLoader(IFileLoader):
             self.logger.warning(f"Не удалось определить кодировку: {e}, используем UTF-8")
             return "utf-8"
 
-    def _detect_separator(self, file_path: Path, encoding: str, **kwargs) -> str:
+    def _detect_separator(self, file_path: Path, encoding: str, **kwargs: Any) -> str:
         """Определяет разделитель в CSV файле"""
 
         # Если разделитель указан явно
         if "sep" in kwargs:
-            return kwargs["sep"]
+            return str(kwargs["sep"])
 
         # Определяем по расширению файла
         if file_path.suffix.lower() == ".tsv":
@@ -119,10 +119,10 @@ class CSVFileLoader(IFileLoader):
 
             # Возможные разделители
             separators = [",", ";", "\\t", "|", " "]
-            separator_scores = {}
+            separator_scores: dict[str, tuple[float, float]] = {}
 
             for sep in separators:
-                scores = []
+                scores: list[int] = []
                 for line in sample_lines:
                     if line:
                         parts = line.split(sep)
@@ -136,7 +136,7 @@ class CSVFileLoader(IFileLoader):
 
             # Выбираем лучший разделитель
             best_sep = ","
-            best_score = 0
+            best_score = 0.0
 
             for sep, (avg_cols, consistency) in separator_scores.items():
                 # Штрафуем разделители, дающие только один столбец
@@ -154,10 +154,12 @@ class CSVFileLoader(IFileLoader):
             self.logger.warning(f"Не удалось определить разделитель: {e}, используем запятую")
             return ","
 
-    def _prepare_load_params(self, separator: str, encoding: str, **kwargs) -> dict[str, Any]:
+    def _prepare_load_params(
+        self, separator: str, encoding: str, **kwargs: Any
+    ) -> dict[str, Any]:
         """Подготавливает параметры для загрузки pandas.read_csv"""
 
-        params = {
+        params: dict[str, Any] = {
             "sep": separator,
             "encoding": encoding,
             "engine": "python",  # Более гибкий парсер
@@ -203,7 +205,9 @@ class CSVFileLoader(IFileLoader):
 
         return params
 
-    def preview_data(self, file_path: Path, max_rows: int = 5, **kwargs) -> pd.DataFrame:
+    def preview_data(
+        self, file_path: Path, max_rows: int = 5, **kwargs: Any
+    ) -> pd.DataFrame:
         """Предварительный просмотр CSV данных"""
         try:
             encoding = self._detect_encoding(file_path)
@@ -212,8 +216,7 @@ class CSVFileLoader(IFileLoader):
             params = self._prepare_load_params(separator, encoding, **kwargs)
             params["nrows"] = max_rows
 
-            df = pd.read_csv(file_path, **params)
-            return df
+            return cast(pd.DataFrame, pd.read_csv(file_path, **params))
 
         except Exception as e:
             self.logger.error(f"Ошибка предварительного просмотра CSV {file_path}: {e}")

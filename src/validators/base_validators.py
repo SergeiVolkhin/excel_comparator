@@ -3,6 +3,7 @@
 """
 
 import logging
+from typing import Any
 
 import pandas as pd
 
@@ -12,12 +13,12 @@ from ..core.interfaces import IValidationRule
 class ShapeValidationRule(IValidationRule):
     """Правило валидации размеров DataFrames"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def validate(self, df1: pd.DataFrame, df2: pd.DataFrame) -> list[str]:
         """Проверяет, что размеры DataFrames совпадают"""
-        errors = []
+        errors: list[str] = []
 
         if df1.shape != df2.shape:
             errors.append(f"Размеры файлов не совпадают: {df1.shape} vs {df2.shape}")
@@ -71,7 +72,7 @@ class DataTypeValidationRule(IValidationRule):
 
     def validate(self, df1: pd.DataFrame, df2: pd.DataFrame) -> list[str]:
         """Проверяет совместимость типов данных"""
-        errors = []
+        errors: list[str] = []
 
         if not self.check_compatibility:
             return errors
@@ -79,7 +80,7 @@ class DataTypeValidationRule(IValidationRule):
         # Проверяем только общие столбцы
         common_columns = set(df1.columns) & set(df2.columns)
 
-        incompatible_columns = []
+        incompatible_columns: list[str] = []
         for col in common_columns:
             type1 = df1[col].dtype
             type2 = df2[col].dtype
@@ -93,7 +94,7 @@ class DataTypeValidationRule(IValidationRule):
 
         return errors
 
-    def _are_types_compatible(self, type1, type2) -> bool:
+    def _are_types_compatible(self, type1: Any, type2: Any) -> bool:
         """Проверяет совместимость типов данных"""
         # Числовые типы совместимы между собой
         numeric_types = ["int64", "int32", "float64", "float32"]
@@ -106,7 +107,7 @@ class DataTypeValidationRule(IValidationRule):
             return True
 
         # Точное совпадение
-        return type1 == type2
+        return bool(type1 == type2)
 
     def get_rule_name(self) -> str:
         return "Проверка типов данных"
@@ -194,7 +195,7 @@ class ValidationRuleFactory:
     """Фабрика для создания валидаторов"""
 
     @staticmethod
-    def create_standard_validators(config=None) -> list[IValidationRule]:
+    def create_standard_validators(config: Any = None) -> list[IValidationRule]:
         """Создает стандартный набор валидаторов"""
         validators = [
             EmptyDataValidationRule(),

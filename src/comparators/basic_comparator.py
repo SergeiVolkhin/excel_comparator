@@ -14,11 +14,13 @@ from ..core.interfaces import ComparisonResult, IComparator
 class BasicComparator(IComparator):
     """Базовый компаратор для сравнения DataFrames"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self._na_marker = object()  # Уникальный объект для обозначения NaN
 
-    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options) -> ComparisonResult:
+    def compare(
+        self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
+    ) -> ComparisonResult:
         """Сравнивает два DataFrame и возвращает результат"""
 
         # Валидация входных данных
@@ -99,9 +101,11 @@ class BasicComparator(IComparator):
 
     def _create_differences_mask(self, df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
         """Создает маску различий между двумя DataFrames"""
-        # Заменяем NaN на уникальный маркер для корректного сравнения
-        df1_filled = df1.fillna(self._na_marker)
-        df2_filled = df2.fillna(self._na_marker)
+        # Заменяем NaN на уникальный маркер для корректного сравнения.
+        # TODO(fix, TODO_bugs.md #2): object-sentinel pattern emits pandas
+        # FutureWarning; replace with `.eq(..) | (.isna() & ..isna())`.
+        df1_filled = df1.fillna(self._na_marker)  # type: ignore[arg-type]
+        df2_filled = df2.fillna(self._na_marker)  # type: ignore[arg-type]
 
         # Создаем маску различий
         differences_mask = df1_filled.values != df2_filled.values

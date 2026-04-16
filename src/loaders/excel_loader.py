@@ -4,12 +4,14 @@
 
 import logging
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar, Literal, cast
 
 import pandas as pd
 
 from ..core.exceptions import FileLoadError
 from ..core.interfaces import IFileLoader
+
+ExcelEngine = Literal["openpyxl", "xlrd"]
 
 
 class ExcelFileLoader(IFileLoader):
@@ -17,14 +19,14 @@ class ExcelFileLoader(IFileLoader):
 
     SUPPORTED_EXTENSIONS: ClassVar[list[str]] = [".xlsx", ".xls"]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def can_load(self, file_path: Path) -> bool:
         """Проверяет, может ли загрузчик обработать данный файл"""
         return file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS
 
-    def load(self, file_path: Path, **kwargs) -> pd.DataFrame:
+    def load(self, file_path: Path, **kwargs: Any) -> pd.DataFrame:
         """Загружает Excel файл и возвращает DataFrame"""
         if not file_path.exists():
             raise FileLoadError(str(file_path), "Файл не существует")
@@ -43,9 +45,16 @@ class ExcelFileLoader(IFileLoader):
             self.logger.info(f"Загрузка файла: {file_path}")
 
             # Определяем движок на основе расширения
-            engine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
+            engine: ExcelEngine = (
+                "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
+            )
 
-            df = pd.read_excel(file_path, sheet_name=sheet_name, header=header, engine=engine)
+            df = cast(
+                pd.DataFrame,
+                pd.read_excel(
+                    file_path, sheet_name=sheet_name, header=header, engine=engine
+                ),
+            )
 
             self.logger.info(f"Успешно загружен файл {file_path.name}: {df.shape}")
 
@@ -72,9 +81,11 @@ class ExcelFileLoader(IFileLoader):
     def get_sheet_names(self, file_path: Path) -> list[str]:
         """Получает список листов в Excel файле"""
         try:
-            engine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
+            engine: ExcelEngine = (
+                "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
+            )
             excel_file = pd.ExcelFile(file_path, engine=engine)
-            return excel_file.sheet_names
+            return [str(name) for name in excel_file.sheet_names]
         except Exception as e:
             self.logger.error(f"Ошибка получения списка листов из {file_path}: {e}")
             return []
@@ -82,9 +93,10 @@ class ExcelFileLoader(IFileLoader):
     def preview_data(self, file_path: Path, max_rows: int = 5) -> pd.DataFrame:
         """Предварительный просмотр данных из файла"""
         try:
-            engine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
-            df = pd.read_excel(file_path, nrows=max_rows, engine=engine)
-            return df
+            engine: ExcelEngine = (
+                "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
+            )
+            return pd.read_excel(file_path, nrows=max_rows, engine=engine)
         except Exception as e:
             self.logger.error(f"Ошибка предварительного просмотра {file_path}: {e}")
             return pd.DataFrame()

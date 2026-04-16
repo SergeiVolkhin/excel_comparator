@@ -41,7 +41,7 @@ class IFileLoader(ABC):
         pass
 
     @abstractmethod
-    def load(self, file_path: Path, **kwargs) -> pd.DataFrame:
+    def load(self, file_path: Path, **kwargs: Any) -> pd.DataFrame:
         """Загружает файл и возвращает DataFrame"""
         pass
 
@@ -55,7 +55,9 @@ class IComparator(ABC):
     """Интерфейс для сравнения данных"""
 
     @abstractmethod
-    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options) -> ComparisonResult:
+    def compare(
+        self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
+    ) -> ComparisonResult:
         """Сравнивает два DataFrame и возвращает результат"""
         pass
 
@@ -83,7 +85,9 @@ class IOutputFormatter(ABC):
     """Интерфейс для форматирования вывода"""
 
     @abstractmethod
-    def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
+    def format(
+        self, result: ComparisonResult, output_path: Path, **options: Any
+    ) -> None:
         """Форматирует и сохраняет результат сравнения"""
         pass
 
@@ -141,7 +145,7 @@ class IProgressReporter(ABC):
 class ProgressReporter(IProgressReporter):
     """Базовая реализация репортера прогресса"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Инициализация репортера прогресса"""
         self._observers: set[IProgressObserver] = set()
 
@@ -193,7 +197,7 @@ class IComparisonStrategy(ABC):
         file2: Path,
         output: Path,
         progress_reporter: IProgressReporter | None = None,
-        **options,
+        **options: Any,
     ) -> ComparisonResult:
         """Выполняет полный цикл сравнения"""
         pass
