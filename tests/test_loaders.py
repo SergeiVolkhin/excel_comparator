@@ -11,7 +11,6 @@ from src.core.exceptions import FileLoadError
 from src.loaders.csv_loader import CSVFileLoader
 from src.loaders.excel_loader import ExcelFileLoader
 
-
 # ---------------------------------------------------------------------------
 # Excel loader
 # ---------------------------------------------------------------------------
@@ -83,11 +82,10 @@ class TestExcelLoaderLoad:
         df = excel_loader.preview_data(bad)
         assert df.empty
 
-    def test_load_empty_xlsx_raises(
-        self, excel_loader: ExcelFileLoader, tmp_path: Path
-    ) -> None:
+    def test_load_empty_xlsx_raises(self, excel_loader: ExcelFileLoader, tmp_path: Path) -> None:
         # Produce an xlsx with zero data rows
         import pandas as pd
+
         empty = pd.DataFrame({"a": []})
         p = tmp_path / "empty.xlsx"
         with pd.ExcelWriter(p, engine="openpyxl") as w:
