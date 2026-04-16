@@ -95,33 +95,34 @@ def test_encoding_round_trip_ascii_payload(
 
 
 # ---------------------------------------------------------------------------
-# Writer roundtrip (skipped until CSVOutputFormatter lands)
+# Writer → loader roundtrip (CSVOutputFormatter → CSVFileLoader)
 # ---------------------------------------------------------------------------
 
 
-_writer_skip = pytest.mark.skip(reason="pending B.5 — CSVOutputFormatter not implemented yet")
-
-
-@_writer_skip
 @given(
     delimiter=st.sampled_from(_DELIMITERS_FOR_CSV),
     rows=st.lists(
-        st.tuples(st.integers(), _safe_text()),
+        st.tuples(st.integers(min_value=-1000, max_value=1000), _safe_text()),
         min_size=1,
         max_size=5,
     ),
+)
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 def test_formatter_to_loader_roundtrip(
     delimiter: str,
     rows: list[tuple[int, str]],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    """Placeholder for the A.5 roundtrip target: once ``CSVOutputFormatter``
-    exists, write via the formatter, load via the loader, assert semantic
-    equality."""
-    from src.formatters.csv_formatter import CSVOutputFormatter  # type: ignore[import-not-found]
-
+    """Write via the formatter, read back via the loader: names survive a
+    roundtrip under every agreed delimiter. The ``__status__`` trailing
+    column is present after the loader reads the file; we check the first
+    two columns only."""
     from src.core.interfaces import ComparisonResult
+    from src.formatters.csv_formatter import CSVOutputFormatter
 
     tmp = tmp_path_factory.mktemp("csv_rt")
     df = pd.DataFrame(rows, columns=["id", "name"])
@@ -139,5 +140,6 @@ def test_formatter_to_loader_roundtrip(
     )
     out: Path = tmp / "out.csv"
     CSVOutputFormatter().format(result, out, delimiter=delimiter)
-    reloaded = CSVFileLoader().load(out)
-    assert list(reloaded.columns)[:2] == ["id", "name"]
+    reloaded = CSVFileLoader().load(out, dtype=str, keep_default_na=False)
+    assert list(reloaded.columns) == ["id", "name", "__status__"]
+    assert reloaded["name"].tolist() == [r[1] for r in rows]
