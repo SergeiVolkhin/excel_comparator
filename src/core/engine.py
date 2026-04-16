@@ -261,11 +261,11 @@ class StandardComparisonStrategy(IComparisonStrategy):
         **options: Any,
     ) -> ComparisonResult:
         """Выполняет стандартное сравнение файлов"""
-        # Устанавливаем компаратор по умолчанию, если не указан
-        comparator_name = options.get("comparator_name", "advanced")
-
-        # Определяем форматтер на основе расширения файла, если не указан
-        formatter_name = options.get("formatter_name")
+        # Pop rather than get: compare_files accepts comparator_name and
+        # formatter_name as explicit kwargs, so leaving them in **options
+        # would cause a TypeError ("multiple values for keyword argument").
+        comparator_name = options.pop("comparator_name", "advanced")
+        formatter_name = options.pop("formatter_name", None)
 
         return self.engine.compare_files(
             file1,
