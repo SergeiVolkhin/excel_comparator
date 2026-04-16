@@ -16,6 +16,16 @@ from ..analyzers.list_analyzer import BasicDifferenceAnalyzer, ListDifferenceAna
 from ..core.exceptions import ApplicationError
 from ..core.interfaces import ComparisonResult, IDifferenceAnalyzer, IOutputFormatter
 
+#: Excel spec caps sheet names at 31 chars; we stay one under to avoid
+#: silent truncation on append when duplicate-suffix resolution kicks in.
+SHEET_NAME_MAX_LEN: int = 30
+
+#: Default hex color used for highlighting differing cells.
+DEFAULT_HIGHLIGHT_COLOR: str = "FFFF00"
+
+#: Header row background color.
+HEADER_FILL_COLOR: str = "E6E6FA"
+
 
 class ExcelOutputFormatter(IOutputFormatter):
     """Форматтер для вывода результатов сравнения в Excel"""
@@ -27,17 +37,22 @@ class ExcelOutputFormatter(IOutputFormatter):
         self.config = config
 
         # Настройки стилей
+        highlight_color = (
+            getattr(config.comparison, "highlight_color", DEFAULT_HIGHLIGHT_COLOR)
+            if config
+            else DEFAULT_HIGHLIGHT_COLOR
+        )
         self.highlight_fill = PatternFill(
-            start_color=getattr(config.comparison, "highlight_color", "FFFF00")
-            if config
-            else "FFFF00",
-            end_color=getattr(config.comparison, "highlight_color", "FFFF00")
-            if config
-            else "FFFF00",
+            start_color=highlight_color,
+            end_color=highlight_color,
             fill_type="solid",
         )
 
-        self.header_fill = PatternFill(start_color="E6E6FA", end_color="E6E6FA", fill_type="solid")
+        self.header_fill = PatternFill(
+            start_color=HEADER_FILL_COLOR,
+            end_color=HEADER_FILL_COLOR,
+            fill_type="solid",
+        )
 
         self.header_font = Font(bold=True, size=12)
         self.center_align = Alignment(horizontal="center", vertical="center")
@@ -97,9 +112,8 @@ class ExcelOutputFormatter(IOutputFormatter):
         file1_name = options.get("file1_name", "Файл 1")
         file2_name = options.get("file2_name", "Файл 2")
 
-        # Обрезаем имена листов до 30 символов
-        sheet1_name = file1_name[:30]
-        sheet2_name = file2_name[:30]
+        sheet1_name = file1_name[:SHEET_NAME_MAX_LEN]
+        sheet2_name = file2_name[:SHEET_NAME_MAX_LEN]
 
         # Создаем столбцы с различиями
         diff_column1 = self._create_differences_column(
