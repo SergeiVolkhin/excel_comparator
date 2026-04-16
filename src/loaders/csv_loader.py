@@ -101,14 +101,14 @@ class CSVFileLoader(IFileLoader):
             self.logger.warning(f"Не удалось определить кодировку: {e}, используем UTF-8")
             return "utf-8"
 
-    _SEPARATOR_CANDIDATES: ClassVar[list[str]] = [",", ";", "\\t", "|", " "]
+    _SEPARATOR_CANDIDATES: ClassVar[list[str]] = [",", ";", "\t", "|", " "]
 
     def _detect_separator(self, file_path: Path, encoding: str, **kwargs: Any) -> str:
         """Определяет разделитель в CSV файле."""
         if "sep" in kwargs:
             return str(kwargs["sep"])
         if file_path.suffix.lower() == ".tsv":
-            return "\\t"
+            return "\t"
         try:
             sample = self._read_sample_lines(file_path, encoding)
             scores = self._score_separators(sample)

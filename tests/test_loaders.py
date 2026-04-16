@@ -248,14 +248,6 @@ class TestCSVLoaderDelimiterDetection:
         assert list(df.columns) == ["id", "name", "score"]
         assert len(df) == 2
 
-    @pytest.mark.xfail(
-        reason=(
-            "bug B1 — _SEPARATOR_CANDIDATES stores '\\\\t' (literal two-char) instead of "
-            "a real tab. Tab-delimited .csv files miss the scorer and fall back to comma. "
-            "Fixed in the B.1 commit; this xfail flips to a positive assertion there."
-        ),
-        strict=True,
-    )
     def test_auto_detect_tab_on_csv_extension(
         self, csv_loader: CSVFileLoader, tmp_path: Path
     ) -> None:
@@ -268,10 +260,8 @@ class TestCSVLoaderDelimiterDetection:
     def test_tsv_extension_short_circuits_to_tab(
         self, csv_loader: CSVFileLoader, tmp_path: Path
     ) -> None:
-        # Pinned current behaviour: .tsv returns "\\t" from _detect_separator
-        # but pandas' engine="python" reinterprets it as the \t regex at load
-        # time, so the file loads correctly. After the B.1 fix this becomes a
-        # real tab string; the visible load outcome is unchanged.
+        # .tsv returns a real tab from _detect_separator (post-B.1); pandas
+        # splits on it literally.
         f = tmp_path / "a.tsv"
         f.write_text("id\tname\n1\tA\n", encoding="utf-8")
         df = csv_loader.load(f)
