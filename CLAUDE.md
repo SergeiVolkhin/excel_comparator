@@ -67,13 +67,16 @@ IValidationRule (src/validators/*)  validate(df1, df2) -> list[str] of error mes
 ```
 
 The engine registers defaults in `_register_default_components`:
-`ExcelFileLoader`, `Basic`/`AdvancedComparator`, `Excel`/`HTMLOutputFormatter`.
-`CSVFileLoader` exists but is **not** registered by default — callers
-add it explicitly via `register_file_loader`. Validation rules are
-**empty by default** (`ValidationRuleFactory` in
-`src/validators/base_validators.py` builds standard/lenient/strict
-sets but nothing wires them in; the comparators do their own size/shape
-validation).
+`ExcelFileLoader`, `CSVFileLoader`, `Basic`/`AdvancedComparator`,
+`Excel`/`HTML`/`CSVOutputFormatter`. `_determine_formatter` auto-selects
+by output suffix (`.xlsx`/`.xls` → excel, `.html`/`.htm` → html,
+`.csv` → csv, other → excel).
+
+Validation rules are **empty by default**
+(`ValidationRuleFactory.for_csv()` / `.create_standard_validators()` /
+`.create_lenient_validators()` / `.create_strict_validators()` return
+sets, but nothing wires them in; the comparators do their own
+size/shape validation).
 
 `ComparisonResult` (dataclass in `src/core/interfaces.py`) is the
 currency between layers: `differences_mask: DataFrame[bool]`,

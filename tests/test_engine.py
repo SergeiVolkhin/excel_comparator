@@ -21,11 +21,11 @@ class TestRegistries:
         assert set(engine.get_available_comparators()) == {"basic", "advanced"}
 
     def test_default_formatters(self, engine: ComparisonEngine) -> None:
-        assert set(engine.get_available_formatters()) == {"excel", "html"}
+        assert set(engine.get_available_formatters()) == {"excel", "html", "csv"}
 
     def test_supported_extensions(self, engine: ComparisonEngine) -> None:
         exts = set(engine.get_supported_file_extensions())
-        assert {".xlsx", ".xls"}.issubset(exts)
+        assert {".xlsx", ".xls", ".csv", ".txt", ".tsv"}.issubset(exts)
 
 
 class TestDetermineFormatter:
@@ -36,6 +36,7 @@ class TestDetermineFormatter:
             (".xls", "excel"),
             (".html", "html"),
             (".htm", "html"),
+            (".csv", "csv"),
             (".bin", "excel"),
         ],
     )
