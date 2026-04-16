@@ -199,9 +199,7 @@ class TestCSVFormatterDiffOnly:
     ) -> None:
         df_a = pd.DataFrame({"id": [1, 2, 3], "v": [10, 20, 30]})
         df_b = pd.DataFrame({"id": [1, 2, 3], "v": [10, 99, 30]})
-        mask = pd.DataFrame(
-            {"id": [False, False, False], "v": [False, True, False]}
-        )
+        mask = pd.DataFrame({"id": [False, False, False], "v": [False, True, False]})
         result = ComparisonResult(
             differences_mask=mask,
             file1_data=df_a,
