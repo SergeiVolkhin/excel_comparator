@@ -15,6 +15,13 @@ import pandas as pd
 from ..core.exceptions import ApplicationError
 from ..core.interfaces import ComparisonResult, IOutputFormatter
 
+#: Default rows-per-page threshold before the report switches to a
+#: paginated structure (one index + N page files).
+DEFAULT_HTML_PAGE_SIZE: int = 1000
+
+#: Default highlight color for cell differences in single-page HTML.
+DEFAULT_HIGHLIGHT_COLOR: str = "FFFF00"
+
 
 class HTMLOutputFormatter(IOutputFormatter):
     """Форматтер для вывода результатов сравнения в HTML"""
@@ -27,12 +34,16 @@ class HTMLOutputFormatter(IOutputFormatter):
 
         # Настройки стилей
         self.highlight_color = (
-            getattr(config.comparison, "highlight_color", "FFFF00") if config else "FFFF00"
+            getattr(config.comparison, "highlight_color", DEFAULT_HIGHLIGHT_COLOR)
+            if config
+            else DEFAULT_HIGHLIGHT_COLOR
         )
 
         # Настройки пагинации для больших таблиц
         self.page_size = (
-            getattr(config.comparison, "max_differences_display", 1000) if config else 1000
+            getattr(config.comparison, "max_differences_display", DEFAULT_HTML_PAGE_SIZE)
+            if config
+            else DEFAULT_HTML_PAGE_SIZE
         )
         self.enable_pagination = True
 
