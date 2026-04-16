@@ -26,7 +26,36 @@ class CSVFileLoader(IFileLoader):
         return file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS
 
     def load(self, file_path: Path, **kwargs: Any) -> pd.DataFrame:
-        """Загружает CSV файл с автоопределением параметров"""
+        """Загружает CSV файл с автоопределением параметров.
+
+        Auto-detected when not provided:
+            encoding — via chardet (fallback UTF-8 when confidence < 0.7).
+            sep — scoring over {",", ";", "\\t", "|"} on the first few lines.
+
+        First-class explicit overrides (all passed straight to pandas):
+            sep: str — skip auto-detection of the delimiter.
+            encoding: str — skip chardet; also silences the fallback warning.
+            skiprows: int | Sequence[int] — drop leading rows before the header.
+            header: int | None — row index for the header, or None for
+                integer-labelled columns.
+            nrows: int — cap the number of data rows read.
+            dtype: str | dict — force a dtype; set to ``str`` to disable
+                pandas' type inference (useful for string-only workflows).
+            keep_default_na: bool — when False, sentinels like "NaN"/"NULL"
+                are kept as strings instead of becoming NaN.
+            comment, quoting, quotechar, doublequote, escapechar,
+            thousands, decimal, lineterminator, skip_blank_lines,
+            na_values, parse_dates, dayfirst, converters, index_col,
+            skipfooter, cache_dates — all forwarded to ``pandas.read_csv``.
+
+        Any kwarg not in the allowlist (see ``_prepare_load_params``) is
+        dropped silently. ``engine`` is pinned to ``\"python\"`` by this
+        loader and cannot be overridden.
+
+        Raises:
+            FileLoadError: file missing, wrong extension, empty, decoding
+                error, parser error, or any other read_csv failure.
+        """
 
         if not file_path.exists():
             raise FileLoadError(str(file_path), "Файл не существует")
