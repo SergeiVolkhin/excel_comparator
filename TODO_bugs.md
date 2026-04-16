@@ -4,11 +4,14 @@ These are **pre-existing** bugs in the codebase, not introduced by the refactor.
 Per plan rules, each is fixed in its own `fix:` commit, not silently folded
 into refactor work.
 
-## 1. `ExcelFileLoader.get_sheet_names` — unclosed `pd.ExcelFile`
+## 1. `ExcelFileLoader.get_sheet_names` — unclosed `pd.ExcelFile`  ✅ FIXED
 - File: `src/loaders/excel_loader.py:74-82`
 - Symptom: `ResourceWarning: unclosed file` surfaced via pytest's
   `PytestUnraisableExceptionWarning` during test runs.
-- Fix: wrap `pd.ExcelFile(...)` in `with`-statement (it's a context manager).
+- Fix applied in commit `perf: add read_only option to ExcelFileLoader
+  + fix unclosed file`: xlsx path now goes through
+  `load_workbook(read_only=True)` with try/finally close; .xls path
+  uses `pd.ExcelFile` in a `with`-block.
 
 ## 2. `BasicComparator._create_differences_mask` — pandas FutureWarning on `fillna(object_sentinel)`
 - File: `src/comparators/basic_comparator.py:108-109`
