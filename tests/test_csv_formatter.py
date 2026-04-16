@@ -193,6 +193,48 @@ class TestCSVFormatterWriterOptions:
         assert b"\r\n" in out.read_bytes()
 
 
+class TestCSVFormatterDiffOnly:
+    def test_diff_only_drops_equal_rows(
+        self, csv_formatter: CSVOutputFormatter, tmp_path: Path
+    ) -> None:
+        df_a = pd.DataFrame({"id": [1, 2, 3], "v": [10, 20, 30]})
+        df_b = pd.DataFrame({"id": [1, 2, 3], "v": [10, 99, 30]})
+        mask = pd.DataFrame(
+            {"id": [False, False, False], "v": [False, True, False]}
+        )
+        result = ComparisonResult(
+            differences_mask=mask,
+            file1_data=df_a,
+            file2_data=df_b,
+            metadata={
+                "total_cells": 6,
+                "different_cells": 1,
+                "similarity_percentage": 83.3,
+                "shape": (3, 2),
+            },
+        )
+        out = tmp_path / "out.csv"
+        csv_formatter.format(result, out, diff_only=True)
+        rows = _csv_to_rows(out)
+        # Header + exactly one data row (the MODIFIED one).
+        assert len(rows) == 2
+        assert rows[1][-1] == STATUS_MODIFIED
+        assert rows[1][0] == "2"
+
+    def test_diff_only_empty_when_all_equal(
+        self,
+        csv_formatter: CSVOutputFormatter,
+        identical_result: ComparisonResult,
+        tmp_path: Path,
+    ) -> None:
+        out = tmp_path / "out.csv"
+        csv_formatter.format(identical_result, out, diff_only=True)
+        rows = _csv_to_rows(out)
+        # Header only, zero data rows.
+        assert len(rows) == 1
+        assert rows[0][-1] == "__status__"
+
+
 class TestCSVFormatterContract:
     def test_supported_formats(self, csv_formatter: CSVOutputFormatter) -> None:
         assert csv_formatter.get_supported_formats() == [".csv"]
