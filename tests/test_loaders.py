@@ -441,3 +441,57 @@ class TestCSVLoaderParamPassthrough:
         df = csv_loader.load(f, engine="c")
         assert list(df.columns) == ["id", "name"]
         assert len(df) == 1
+
+
+class TestCSVLoaderChunkedPath:
+    """The chunked path activates above ``_CHUNK_THRESHOLD_BYTES``. We
+    exercise it two ways: monkeypatching the threshold to nearly-zero so
+    any small file triggers it (fast, always runs), and generating a real
+    ~120 MB file (slow, opt-in via ``-m slow``)."""
+
+    def test_chunked_path_taken_with_lowered_threshold(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(CSVFileLoader, "_CHUNK_THRESHOLD_BYTES", 1)
+        f = tmp_path / "tiny.csv"
+        f.write_text("id,name\n1,Alice\n2,Bob\n3,Charlie\n", encoding="utf-8")
+        df = csv_loader.load(f, chunk_size=2)
+        # 3 rows, read as one chunk of 2 + one chunk of 1, concat'd back.
+        assert list(df.columns) == ["id", "name"]
+        assert len(df) == 3
+        assert df.iloc[2]["name"] == "Charlie"
+
+    def test_chunk_size_kwarg_not_forwarded_to_pandas(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        # Without the fix the default path would forward chunk_size to
+        # pd.read_csv which would return an iterator, breaking the shape
+        # assertion. Pins that load() consumes chunk_size and pandas sees
+        # no unknown kwargs.
+        f = tmp_path / "small.csv"
+        f.write_text("id,name\n1,A\n2,B\n", encoding="utf-8")
+        df = csv_loader.load(f, chunk_size=10)  # below threshold, ignored
+        assert len(df) == 2
+
+    @pytest.mark.slow
+    def test_chunked_path_on_120mb_file(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        import pandas as pd
+
+        # Generate a CSV that comfortably exceeds the 100 MB threshold.
+        # At ~90 bytes per row, 1.5M rows lands around 135 MB.
+        n_rows = 1_500_000
+        src = pd.DataFrame(
+            {
+                "id": range(n_rows),
+                "value": [f"payload-{i:08d}" for i in range(n_rows)],
+            }
+        )
+        f = tmp_path / "big.csv"
+        src.to_csv(f, index=False)
+        assert f.stat().st_size > 100 * 1024 * 1024
+
+        df = csv_loader.load(f)
+        assert len(df) == n_rows
+        assert df.iloc[n_rows // 2]["id"] == n_rows // 2

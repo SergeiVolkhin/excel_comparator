@@ -18,6 +18,15 @@ class CSVFileLoader(IFileLoader):
 
     SUPPORTED_EXTENSIONS: ClassVar[list[str]] = [".csv", ".txt", ".tsv"]
 
+    #: Files larger than this are read through a pandas chunk iterator and
+    #: concatenated. Below the threshold pandas' peak memory usage stays
+    #: tolerable; above it the iterator caps concurrent memory at one chunk.
+    _CHUNK_THRESHOLD_BYTES: ClassVar[int] = 100 * 1024 * 1024
+
+    #: Rows per chunk when the chunked path is taken. Tuneable via the
+    #: ``chunk_size`` kwarg on ``load``.
+    _DEFAULT_CHUNK_SIZE: ClassVar[int] = 50_000
+
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -47,6 +56,9 @@ class CSVFileLoader(IFileLoader):
             thousands, decimal, lineterminator, skip_blank_lines,
             na_values, parse_dates, dayfirst, converters, index_col,
             skipfooter, cache_dates — all forwarded to ``pandas.read_csv``.
+            chunk_size: int — rows per chunk when the file size exceeds
+                ``_CHUNK_THRESHOLD_BYTES`` (100 MB). Default 50 000. Lower
+                values reduce peak memory at the cost of more concat work.
 
         Any kwarg not in the allowlist (see ``_prepare_load_params``) is
         dropped silently. ``engine`` is pinned to ``\"python\"`` by this
@@ -66,6 +78,8 @@ class CSVFileLoader(IFileLoader):
                 f"Неподдерживаемое расширение. Поддерживаемые: {', '.join(self.SUPPORTED_EXTENSIONS)}",
             )
 
+        chunk_size = int(kwargs.pop("chunk_size", self._DEFAULT_CHUNK_SIZE))
+
         try:
             # Определяем кодировку
             encoding = self._detect_encoding(file_path)
@@ -80,8 +94,17 @@ class CSVFileLoader(IFileLoader):
 
             self.logger.info(f"Загрузка CSV файла: {file_path}")
 
-            # Загружаем файл
-            df = cast(pd.DataFrame, pd.read_csv(file_path, **load_params))
+            # Выбираем путь: обычный или чанкованный (для больших файлов)
+            file_size = file_path.stat().st_size
+            if file_size > self._CHUNK_THRESHOLD_BYTES:
+                self.logger.info(
+                    f"Размер файла {file_size / 1024 / 1024:.1f} MB превышает порог "
+                    f"{self._CHUNK_THRESHOLD_BYTES / 1024 / 1024:.0f} MB — чтение по {chunk_size} строк"
+                )
+                chunks = pd.read_csv(file_path, chunksize=chunk_size, **load_params)
+                df = cast(pd.DataFrame, pd.concat(chunks, ignore_index=True))
+            else:
+                df = cast(pd.DataFrame, pd.read_csv(file_path, **load_params))
 
             self.logger.info(f"Успешно загружен CSV файл {file_path.name}: {df.shape}")
 
