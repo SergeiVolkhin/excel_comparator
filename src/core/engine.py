@@ -131,7 +131,9 @@ class ComparisonEngine:
             result = self._run_comparison(df1, df2, comparator_name, options)
             self._report(progress_reporter, 70, "Сравнение выполнено")
 
-            self._run_formatter(result, output_path, formatter_name, file1_path, file2_path, options)
+            self._run_formatter(
+                result, output_path, formatter_name, file1_path, file2_path, options
+            )
             self._report(progress_reporter, 100, "Сравнение завершено")
             if progress_reporter:
                 progress_reporter.report_completion(f"Результат сохранен в {output_path}")
@@ -147,9 +149,7 @@ class ComparisonEngine:
             raise
 
     @staticmethod
-    def _report(
-        reporter: IProgressReporter | None, percent: int, message: str
-    ) -> None:
+    def _report(reporter: IProgressReporter | None, percent: int, message: str) -> None:
         if reporter:
             reporter.report_progress(percent, 100, message)
 
@@ -195,9 +195,7 @@ class ComparisonEngine:
     ) -> None:
         formatter = self._get_formatter(formatter_name)
         format_options: dict[str, Any] = dict(options.get("format_options", {}))
-        format_options.update(
-            {"file1_name": file1_path.stem, "file2_name": file2_path.stem}
-        )
+        format_options.update({"file1_name": file1_path.stem, "file2_name": file2_path.stem})
         formatter.format(result, output_path, **format_options)
 
     def _find_file_loader(self, file_path: Path) -> IFileLoader:

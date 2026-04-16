@@ -62,7 +62,7 @@ excel_comparator/
 ### ⚖️ Comparators (Компараторы)
 
 - **basic_comparator.py**: Точное побайтовое сравнение
-- **advanced_comparator.py**: 
+- **advanced_comparator.py**:
   - Нечеткое сравнение с порогом схожести
   - Числовое сравнение с допусками
   - Структурный анализ
@@ -95,7 +95,7 @@ excel_comparator/
 class JSONLoader(IFileLoader):
     def can_load(self, file_path: Path) -> bool:
         return file_path.suffix.lower() == '.json'
-    
+
     def load(self, file_path: Path, **kwargs) -> pd.DataFrame:
         # Реализация загрузки JSON
         pass
@@ -128,11 +128,11 @@ class ComparisonEngine:
 ```python
 class SemanticComparator(IComparator):
     \"\"\"Семантическое сравнение с использованием NLP\"\"\"
-    
+
     def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options) -> ComparisonResult:
         # Семантический анализ текста
         pass
-    
+
     def get_name(self) -> str:
         return "Семантическое сравнение"
 
@@ -145,11 +145,11 @@ engine.register_comparator("semantic", SemanticComparator())
 ```python
 class PDFFormatter(IOutputFormatter):
     \"\"\"Экспорт в PDF\"\"\"
-    
+
     def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
         # Генерация PDF отчета
         pass
-    
+
     def get_supported_formats(self) -> List[str]:
         return ['.pdf']
 

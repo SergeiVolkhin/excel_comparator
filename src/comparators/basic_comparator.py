@@ -18,9 +18,7 @@ class BasicComparator(IComparator):
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    def compare(
-        self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any
-    ) -> ComparisonResult:
+    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any) -> ComparisonResult:
         """Сравнивает два DataFrame и возвращает результат"""
 
         # Валидация входных данных

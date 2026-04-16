@@ -55,12 +55,12 @@ engine = ComparisonEngine()
 result = engine.compare_files(file1, file2, output, comparator_name="basic")
 ```
 
-### 2. Нечеткое сравнение  
+### 2. Нечеткое сравнение
 Сравнение с учетом схожести текста
 ```python
 # Нечеткое сравнение с порогом 80%
 result = engine.compare_files(
-    file1, file2, output, 
+    file1, file2, output,
     comparator_name="fuzzy_80",
     comparison_options={'similarity_threshold': 0.8}
 )
@@ -95,7 +95,7 @@ result = engine.compare_files(file1, file2, output, comparator_name="structural"
 src/
 ├── core/           # Ядро системы (интерфейсы, движок, конфигурация)
 ├── loaders/        # Загрузчики файлов (Excel, CSV, ...)
-├── comparators/    # Алгоритмы сравнения 
+├── comparators/    # Алгоритмы сравнения
 ├── formatters/     # Форматтеры вывода (Excel, HTML, ...)
 ├── validators/     # Валидаторы данных
 ├── analyzers/      # Анализаторы различий
@@ -121,13 +121,13 @@ import pandas as pd
 class JSONFileLoader(IFileLoader):
     def can_load(self, file_path: Path) -> bool:
         return file_path.suffix.lower() == '.json'
-    
+
     def load(self, file_path: Path, **kwargs) -> pd.DataFrame:
         import json
         with open(file_path) as f:
             data = json.load(f)
         return pd.DataFrame(data)
-    
+
     def get_supported_extensions(self) -> List[str]:
         return ['.json']
 
@@ -145,13 +145,13 @@ class CustomComparator(IComparator):
         # Ваш алгоритм сравнения
         differences_mask = # ваша логика
         metadata = # ваши метаданные
-        
+
         return ComparisonResult(differences_mask, df1, df2, metadata)
-    
+
     def get_name(self) -> str:
         return "Мой компаратор"
 
-# Регистрация в движке  
+# Регистрация в движке
 engine.register_comparator("custom", CustomComparator())
 ```
 
@@ -164,7 +164,7 @@ class PDFFormatter(IOutputFormatter):
     def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
         # Генерация PDF отчета
         pass
-    
+
     def get_supported_formats(self) -> List[str]:
         return ['.pdf']
 
@@ -208,7 +208,7 @@ engine.register_formatter("pdf", PDFFormatter())
 - 📈 Лист со статистикой и сводкой
 - 📝 Столбец с описанием различий
 
-### HTML отчет  
+### HTML отчет
 - 🌐 Интерактивный веб-интерфейс
 - 📊 Графики и диаграммы статистики
 - 🎨 Современный дизайн
@@ -254,7 +254,7 @@ engine = ComparisonEngine(config)
 # Базовое сравнение
 result = engine.compare_files(
     file1_path=Path("data1.xlsx"),
-    file2_path=Path("data2.xlsx"), 
+    file2_path=Path("data2.xlsx"),
     output_path=Path("comparison_result.xlsx"),
     comparator_name="basic",
     formatter_name="excel"
@@ -276,12 +276,12 @@ from pathlib import Path
 def batch_compare(folder1: str, folder2: str, output_folder: str):
     """Сравнение всех файлов в двух папках"""
     engine = ComparisonEngine()
-    
+
     for file1 in Path(folder1).glob("*.xlsx"):
         file2 = Path(folder2) / file1.name
         if file2.exists():
             output = Path(output_folder) / f"comparison_{file1.stem}.xlsx"
-            
+
             try:
                 result = engine.compare_files(file1, file2, output)
                 print(f"✅ {file1.name}: {result.metadata['similarity_percentage']:.1f}% схожести")
@@ -302,16 +302,16 @@ from src.formatters.html_formatter import HTMLOutputFormatter
 def setup_extended_engine():
     """Настройка движка с дополнительными компонентами"""
     engine = ComparisonEngine()
-    
+
     # Добавляем CSV поддержку
     engine.register_file_loader(CSVFileLoader())
-    
+
     # Добавляем нечеткое сравнение
     engine.register_comparator("fuzzy", FuzzyComparator(0.85))
-    
+
     # Добавляем HTML вывод
     engine.register_formatter("html", HTMLOutputFormatter())
-    
+
     return engine
 
 engine = setup_extended_engine()
