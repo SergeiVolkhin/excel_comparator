@@ -14,9 +14,13 @@ from pathlib import Path
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 warnings.filterwarnings("ignore", category=FutureWarning, module="pandas")
 
-# Настраиваем кодировку для Windows
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+
+def _reconfigure_stdout_for_windows() -> None:
+    """Force UTF-8 on stdout for cp1251-locale consoles. Called only from
+    __main__ so that importing this module under pytest (which captures
+    stdout) doesn't break the test runner."""
+    if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 
 def setup_logging(log_level: str = "INFO") -> None:
@@ -70,6 +74,42 @@ def parse_arguments():
 
     parser.add_argument(
         "--ignore-whitespace", action="store_true", help="Игнорировать пробелы при сравнении"
+    )
+
+    parser.add_argument(
+        "--format",
+        type=str,
+        choices=["xlsx", "html", "csv"],
+        default=None,
+        help="Формат выходного файла. По умолчанию определяется по расширению --output.",
+    )
+
+    parser.add_argument(
+        "--csv-encoding",
+        type=str,
+        default=None,
+        help="Принудительная кодировка для CSV-входов (иначе — автодетект chardet).",
+    )
+
+    parser.add_argument(
+        "--csv-delimiter",
+        type=str,
+        default=None,
+        help="Принудительный разделитель для CSV-входов (иначе — автодетект).",
+    )
+
+    parser.add_argument(
+        "--csv-skip-rows",
+        type=int,
+        default=None,
+        help="Пропустить N первых строк при чтении CSV.",
+    )
+
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Размер чанка при чтении CSV > 100 MB (по умолчанию 50000).",
     )
 
     parser.add_argument(
@@ -194,11 +234,28 @@ def run_cli_mode(args):
         print(f"  Результат будет сохранен в: {output_path}")
         print("")
 
+        loader_options: dict = {}
+        if args.csv_encoding is not None:
+            loader_options["encoding"] = args.csv_encoding
+        if args.csv_delimiter is not None:
+            loader_options["sep"] = args.csv_delimiter
+        if args.csv_skip_rows is not None:
+            loader_options["skiprows"] = args.csv_skip_rows
+        if args.chunk_size is not None:
+            loader_options["chunk_size"] = args.chunk_size
+
+        # CLI --format uses user-facing extension labels; the engine's
+        # formatter registry keys them differently for xlsx.
+        format_map = {"xlsx": "excel", "html": "html", "csv": "csv"}
+        formatter_name = format_map[args.format] if args.format else None
+
         options = {
             "comparison_options": {
                 "ignore_case": args.ignore_case,
                 "ignore_whitespace": args.ignore_whitespace,
             },
+            "loader_options": loader_options,
+            "formatter_name": formatter_name,
             "file1_name": file1_path.name,
             "file2_name": file2_path.name,
         }
@@ -250,4 +307,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _reconfigure_stdout_for_windows()
     main()
