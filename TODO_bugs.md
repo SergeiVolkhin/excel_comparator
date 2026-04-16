@@ -25,13 +25,17 @@ into refactor work.
   `tests/test_basic_comparator.py::test_no_future_warning_on_object_columns`.
   pytest `filterwarnings = ["error"]` (no pandas suppressions).
 
-## 3. `BasicComparator._preprocess_dataframe` — chained `astype(str)` on numeric dtypes
-- File: `src/comparators/basic_comparator.py:95-101`
-- Symptom: `.astype(str).str.lower()` runs on numeric columns when
-  `ignore_case`/`ignore_whitespace` is set, wasting CPU and converting
-  numbers to strings unintentionally if the mask matches.
-- Fix: apply only to `dtype == "object"` columns (guard already partially
-  present but still enters the loop for non-strings).
+## 3. `BasicComparator._preprocess_dataframe` — wasteful `astype(str)` mask on every cell  ✅ FIXED
+- File: `src/comparators/basic_comparator.py:95-101` (original)
+- Symptom: even with a dtype==object guard, the NaN-mask was built as
+  `result_df[col].astype(str) != 'nan'` — this coerced *every* value in
+  the column just to detect NaN, and also misbehaves if a cell contains
+  the literal string ``"nan"``.
+- Fix applied in commit `refactor: dedupe _preprocess_dataframe ...`
+  (2899087): the extracted `preprocess_dataframe` in
+  `src/comparators/_shared.py` now uses `result[col].notna()`, which is
+  both cheaper and semantically correct. Regression test added in
+  `tests/test_basic_comparator.py::test_ignore_case_preserves_numeric_columns`.
 
 ## 4. `AdvancedComparator.align_dataframes` with `key_columns` — result ignored
 - File: `src/comparators/advanced_comparator.py:156-176`

@@ -79,6 +79,16 @@ class TestCompareOptions:
         result = comp.compare(df1, df2, ignore_case=True)
         assert result.differences_mask.sum().sum() == 0
 
+    def test_ignore_case_preserves_numeric_columns(self, comp: BasicComparator) -> None:
+        """Regression for TODO_bugs.md #3: ignore_case must skip numeric
+        columns entirely; previously the preprocess mask used
+        ``astype(str) != 'nan'`` which touched every cell."""
+        df1 = pd.DataFrame({"n": [1, 2, 3], "s": ["A", "B", "C"]})
+        df2 = pd.DataFrame({"n": [1, 2, 3], "s": ["a", "b", "c"]})
+        preprocessed = comp._preprocess_dataframe(df1, ignore_case=True)
+        assert preprocessed["n"].dtype == df1["n"].dtype
+        assert list(preprocessed["n"]) == [1, 2, 3]
+
     def test_ignore_whitespace(self, comp: BasicComparator) -> None:
         df1 = pd.DataFrame({"x": [" a ", "b"]})
         df2 = pd.DataFrame({"x": ["a", "b"]})
