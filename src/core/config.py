@@ -141,31 +141,35 @@ class AppConfig(BaseModel):
                 "Файл конфигурации не найден, используются настройки по умолчанию"
             )
             return
-
         try:
-            with open(self.config_path, encoding="utf-8") as f:
-                if self.config_format == ConfigFormat.JSON:
-                    config_data = json.load(f)
-
-            if "comparison" in config_data:
-                for key, value in config_data["comparison"].items():
-                    if hasattr(self.comparison, key):
-                        setattr(self.comparison, key, value)
-
-            if "gui" in config_data:
-                for key, value in config_data["gui"].items():
-                    if hasattr(self.gui, key):
-                        setattr(self.gui, key, value)
-
-            for key in ["log_level", "auto_save_config", "recent_files", "max_recent_files"]:
-                if key in config_data:
-                    setattr(self, key, config_data[key])
-
+            config_data = self._read_config_file()
+            self._apply_config_dict(config_data)
             self.validate()
             self.logger.info("Конфигурация успешно загружена")
-
         except Exception as e:
             self.logger.error(f"Ошибка загрузки конфигурации: {e}")
+
+    def _read_config_file(self) -> dict[str, Any]:
+        """Читает файл конфигурации в соответствии с форматом."""
+        with open(self.config_path, encoding="utf-8") as f:
+            if self.config_format == ConfigFormat.JSON:
+                return dict(json.load(f))
+        return {}
+
+    def _apply_config_dict(self, config_data: dict[str, Any]) -> None:
+        """Применяет загруженный словарь к текущему объекту."""
+        self._apply_nested(self.comparison, config_data.get("comparison", {}))
+        self._apply_nested(self.gui, config_data.get("gui", {}))
+        for key in ("log_level", "auto_save_config", "recent_files", "max_recent_files"):
+            if key in config_data:
+                setattr(self, key, config_data[key])
+
+    @staticmethod
+    def _apply_nested(target: BaseModel, source: dict[str, Any]) -> None:
+        """Копирует существующие поля из dict в BaseModel."""
+        for key, value in source.items():
+            if hasattr(target, key):
+                setattr(target, key, value)
 
     def save_config(self) -> None:
         """Сохраняет конфигурацию в файл"""

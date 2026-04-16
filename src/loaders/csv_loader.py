@@ -101,58 +101,51 @@ class CSVFileLoader(IFileLoader):
             self.logger.warning(f"Не удалось определить кодировку: {e}, используем UTF-8")
             return "utf-8"
 
-    def _detect_separator(self, file_path: Path, encoding: str, **kwargs: Any) -> str:
-        """Определяет разделитель в CSV файле"""
+    _SEPARATOR_CANDIDATES: ClassVar[list[str]] = [",", ";", "\\t", "|", " "]
 
-        # Если разделитель указан явно
+    def _detect_separator(self, file_path: Path, encoding: str, **kwargs: Any) -> str:
+        """Определяет разделитель в CSV файле."""
         if "sep" in kwargs:
             return str(kwargs["sep"])
-
-        # Определяем по расширению файла
         if file_path.suffix.lower() == ".tsv":
             return "\\t"
-
         try:
-            # Читаем первые несколько строк для анализа
-            with open(file_path, encoding=encoding) as f:
-                sample_lines = [f.readline().strip() for _ in range(min(5, sum(1 for _ in f)))]
-
-            # Возможные разделители
-            separators = [",", ";", "\\t", "|", " "]
-            separator_scores: dict[str, tuple[float, float]] = {}
-
-            for sep in separators:
-                scores: list[int] = []
-                for line in sample_lines:
-                    if line:
-                        parts = line.split(sep)
-                        scores.append(len(parts))
-
-                if scores:
-                    # Проверяем консистентность количества столбцов
-                    avg_cols = sum(scores) / len(scores)
-                    consistency = 1.0 - (max(scores) - min(scores)) / max(1, avg_cols)
-                    separator_scores[sep] = (avg_cols, consistency)
-
-            # Выбираем лучший разделитель
-            best_sep = ","
-            best_score = 0.0
-
-            for sep, (avg_cols, consistency) in separator_scores.items():
-                # Штрафуем разделители, дающие только один столбец
-                if avg_cols <= 1:
-                    continue
-
-                score = avg_cols * consistency
-                if score > best_score:
-                    best_score = score
-                    best_sep = sep
-
-            return best_sep
-
+            sample = self._read_sample_lines(file_path, encoding)
+            scores = self._score_separators(sample)
+            return self._pick_best_separator(scores)
         except Exception as e:
             self.logger.warning(f"Не удалось определить разделитель: {e}, используем запятую")
             return ","
+
+    @staticmethod
+    def _read_sample_lines(file_path: Path, encoding: str, max_lines: int = 5) -> list[str]:
+        with open(file_path, encoding=encoding) as f:
+            total = sum(1 for _ in f)
+        with open(file_path, encoding=encoding) as f:
+            return [f.readline().strip() for _ in range(min(max_lines, total))]
+
+    @classmethod
+    def _score_separators(cls, lines: list[str]) -> dict[str, tuple[float, float]]:
+        scores: dict[str, tuple[float, float]] = {}
+        for sep in cls._SEPARATOR_CANDIDATES:
+            col_counts = [len(line.split(sep)) for line in lines if line]
+            if not col_counts:
+                continue
+            avg = sum(col_counts) / len(col_counts)
+            consistency = 1.0 - (max(col_counts) - min(col_counts)) / max(1, avg)
+            scores[sep] = (avg, consistency)
+        return scores
+
+    @staticmethod
+    def _pick_best_separator(scores: dict[str, tuple[float, float]]) -> str:
+        best_sep, best_score = ",", 0.0
+        for sep, (avg, consistency) in scores.items():
+            if avg <= 1:
+                continue
+            value = avg * consistency
+            if value > best_score:
+                best_sep, best_score = sep, value
+        return best_sep
 
     def _prepare_load_params(
         self, separator: str, encoding: str, **kwargs: Any
