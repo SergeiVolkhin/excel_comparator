@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-16
+
+First tagged release. Baseline snapshot of the codebase after the
+three-phase refactor: safety net (characterization tests), structural
+cleanup (types, pydantic-settings, dedupe), and infrastructure
+(pre-commit + CI + docs). Public API preserved throughout.
+
 ### Added
 
 - `ExcelFileLoader.load(..., read_only=True)` streams xlsx through
