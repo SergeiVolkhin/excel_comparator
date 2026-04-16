@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-16
+
+CSV promoted to a first-class input and output format in parity with
+Excel. Loader extended, new output formatter, CSV-specific validators,
+CLI flags. Two latent bugs in the delimiter auto-detect fixed.
+
+### Added
+
+- **`CSVOutputFormatter`** (`src/formatters/csv_formatter.py`). Writes
+  comparison results to CSV with a trailing `__status__` column
+  (`EQUAL` / `MODIFIED` / `ADDED` / `REMOVED`). Options: `encoding`
+  (incl. `utf-8-sig` for BOM), `delimiter`, `quoting` (csv.QUOTE_*),
+  `lineterminator`, `diff_only=True` (drop equal rows). Registered by
+  default under the `"csv"` key.
+- **Chunked CSV loading**. `CSVFileLoader.load()` switches to a pandas
+  chunk iterator when the file exceeds 100 MB (default 50 000 rows per
+  chunk; override via `chunk_size=`). Keeps peak memory bounded to one
+  chunk instead of the usual ~3× file-size pandas materialisation.
+- **CSV-specific validators** (`src/validators/csv_validators.py`):
+  - `CSVRowCountRatioValidator` — flags implausible row-count imbalances
+    (>100× by default), a common symptom of a wrong delimiter choice.
+  - `CSVSingleColumnCollapseValidator` — flags a one-column object
+    DataFrame whose sample rows still contain CSV delimiters.
+  - `ValidationRuleFactory.for_csv(config)` bundles standard rules +
+    the CSV-specific ones.
+- **CLI flags** (additive, existing flags unchanged):
+  - `--format {xlsx,html,csv}` — override suffix-based formatter
+    auto-detection.
+  - `--csv-encoding ENC`, `--csv-delimiter SEP`, `--csv-skip-rows N`,
+    `--chunk-size N` — forwarded to the CSV loader.
+- **Expanded `CSVFileLoader.load()` docstring** listing every
+  first-class kwarg, auto-detected defaults, and the pinned
+  `engine="python"`.
+- **Integration tests** (`tests/test_csv_integration.py`) — CSV↔CSV
+  across delimiters / encodings / ignore_case / ignore_whitespace, and
+  CSV↔Excel in both directions.
+- **Snapshot tests** (`tests/test_csv_formatter.py`) — pin the
+  `__status__` column contract, ADDED/REMOVED row swap, writer
+  options, and `diff_only` mode.
+- **Hypothesis property tests** (`tests/test_csv_properties.py`) —
+  delimiter auto-detect invariance, encoding round-trip, and
+  formatter→loader roundtrip.
+- **CLI tests** (`tests/test_cli.py`) covering the new flags and
+  `run_cli_mode` end-to-end with CSV inputs and outputs.
+- **CSV benchmarks** in `tests/test_benchmarks.py` (10k load,
+  200k load, 200k compare).
+
+### Changed
+
+- **`ComparisonEngine` default composition** now includes
+  `CSVFileLoader` and `CSVOutputFormatter`. Callers that previously
+  registered `CSVFileLoader` manually still work — the extra
+  registration is a harmless duplicate.
+  Breaking for code that introspects `get_available_formatters()` (set
+  grows from `{excel, html}` to `{excel, html, csv}`) or
+  `get_supported_file_extensions()` (now also `.csv/.txt/.tsv`).
+- `engine._determine_formatter` maps `.csv` → `"csv"`.
+- `CLAUDE.md` Architecture section updated to the new defaults.
+
+### Fixed
+
+- **`_SEPARATOR_CANDIDATES` tab literal (bug B1).** The candidate list
+  held the two-char string `"\\t"` (backslash + t), so the scorer's
+  `line.split(sep)` never matched a real tab. Tab-delimited `.csv`
+  files fell through to the comma fallback. The `.tsv` short-circuit
+  worked only by accident, via `engine="python"` regex rewriting.
+  Replaced with a genuine tab character in both places.
+- **Space delimiter candidate (bug B2).** Dropped `" "` from the
+  scoring set: consistent spacing between columns produced false
+  positives that overrode the intended delimiter.
+- **`StandardComparisonStrategy.execute` double-kwarg.** The strategy
+  did `options.get("formatter_name")` while still passing `**options`
+  through to `engine.compare_files`, which accepts `formatter_name`
+  explicitly. Triggered `TypeError: multiple values for keyword
+  argument 'formatter_name'` once the CLI started populating that
+  key. Switched to `pop` for both `comparator_name` and
+  `formatter_name`.
+- **`main.py` stdout reconfiguration** now only runs from `__main__`;
+  importing the module under pytest no longer closes the captured
+  stdout.
+
+### Test suite
+
+- Grew from **144** pytest cases to **223** (all green) plus 2 slow
+  tests (opt-in via `-m slow`). Branch coverage:
+  - `src/loaders/csv_loader.py`: 80 % → **99 %**.
+  - `src/formatters/csv_formatter.py`: new, **100 %**.
+  - `src/validators/csv_validators.py`: new, **97 %**.
+  - Total: 89 % → **91 %**.
+
 ## [0.1.0] - 2026-04-16
 
 First tagged release. Baseline snapshot of the codebase after the

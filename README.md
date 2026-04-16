@@ -6,9 +6,9 @@
 
 - 🏗️ **Модульная архитектура** - соответствует принципам SOLID
 - 🔌 **Расширяемость** - легкое добавление новых компонентов без изменения существующего кода
-- 📊 **Множественные форматы** - поддержка Excel, CSV и возможность добавления новых
+- 📊 **Множественные форматы** - Excel (`.xlsx`/`.xls`), CSV/TSV (`.csv`/`.txt`/`.tsv`) с auto-detect кодировки и разделителя
 - 🎯 **Различные алгоритмы сравнения** - точное, нечеткое, числовое, структурное
-- 🎨 **Гибкий вывод** - Excel с подсветкой, HTML отчеты, легко добавить новые форматы
+- 🎨 **Гибкий вывод** - Excel с подсветкой, HTML отчеты, CSV с колонкой `__status__`
 - 🖥️ **Современный GUI** - интуитивный интерфейс на tkinter
 - ⚙️ **Конфигурируемость** - настройки сохраняются автоматически
 - 📝 **Детальное логирование** - полная диагностика процесса сравнения
@@ -102,6 +102,51 @@ Re-run бенчмарков:
 pytest tests/test_benchmarks.py --benchmark-only \
     --benchmark-compare=0001_baseline --benchmark-columns=min,mean,max
 ```
+
+## 📄 CSV поддержка
+
+CSV/TSV файлы (`.csv`, `.txt`, `.tsv`) — загрузчик и форматтер
+зарегистрированы по умолчанию, выбор по расширению входного и
+выходного файла. Сравнение CSV↔CSV, CSV↔Excel и Excel↔CSV работает
+из коробки.
+
+**Auto-detect**:
+- Кодировка — через `chardet` (fallback UTF-8 при confidence < 0.7),
+  BOM снимается автоматически.
+- Разделитель — оценка по первым строкам из набора `,`, `;`, `\t`,
+  `|`. Для `.tsv` короткий путь сразу возвращает табуляцию.
+
+**Chunked reading** — файлы > 100 MB читаются чанками по 50 000 строк
+(настраивается `chunk_size=`).
+
+**CLI пример**:
+
+```bash
+python main.py --cli \
+    --file1 prod.csv --file2 staging.csv --output diff.csv \
+    --csv-delimiter ';' --csv-encoding cp1251
+```
+
+**API**:
+
+```python
+from pathlib import Path
+from src.core.engine import ComparisonEngine
+
+engine = ComparisonEngine()  # CSV зарегистрирован по умолчанию
+result = engine.compare_files(
+    Path("a.csv"),
+    Path("b.csv"),
+    Path("diff.csv"),  # .csv → CSVOutputFormatter
+    comparator_name="basic",
+    loader_options={"sep": ";", "encoding": "cp1251"},
+    format_options={"delimiter": ";", "encoding": "utf-8-sig"},
+)
+```
+
+Выходной CSV получает колонку `__status__` со значениями
+`EQUAL` / `MODIFIED` / `ADDED` / `REMOVED`. Режим `diff_only=True`
+отбрасывает `EQUAL`-строки.
 
 ## 🎯 Режимы сравнения
 
@@ -273,6 +318,12 @@ engine.register_formatter("pdf", PDFFormatter())
 - 🎨 Современный дизайн
 - 📱 Адаптивная верстка
 
+### CSV отчет
+- 📋 Исходные колонки + трейлинг `__status__`
+  (`EQUAL` / `MODIFIED` / `ADDED` / `REMOVED`)
+- ⚙️ Кодировка, разделитель, quoting и lineterminator — опциональны
+- 🎯 `diff_only=True` — только строки с различиями
+
 ## 🧪 Тестирование
 
 ```bash
@@ -354,22 +405,17 @@ batch_compare("folder1", "folder2", "results")
 ### Настройка расширенного движка
 
 ```python
-from src.loaders.csv_loader import CSVFileLoader
 from src.comparators.advanced_comparator import FuzzyComparator
-from src.formatters.html_formatter import HTMLOutputFormatter
 
 def setup_extended_engine():
-    """Настройка движка с дополнительными компонентами"""
-    engine = ComparisonEngine()
+    """Настройка движка с дополнительными компонентами.
 
-    # Добавляем CSV поддержку
-    engine.register_file_loader(CSVFileLoader())
+    Excel, CSV (.csv/.txt/.tsv) и HTML уже зарегистрированы по умолчанию.
+    """
+    engine = ComparisonEngine()
 
     # Добавляем нечеткое сравнение
     engine.register_comparator("fuzzy", FuzzyComparator(0.85))
-
-    # Добавляем HTML вывод
-    engine.register_formatter("html", HTMLOutputFormatter())
 
     return engine
 
