@@ -109,74 +109,34 @@ class ComparisonEngine:
         file1_path: Path,
         file2_path: Path,
         output_path: Path,
-        comparator_name: str = "advanced",  # По умолчанию используем улучшенный компаратор
-        formatter_name: str | None = None,  # Автоопределение по расширению
+        comparator_name: str = "advanced",
+        formatter_name: str | None = None,
         progress_reporter: IProgressReporter | None = None,
         **options: Any,
     ) -> ComparisonResult:
         """Выполняет полное сравнение файлов"""
-
         try:
-            if progress_reporter:
-                progress_reporter.report_progress(0, 100, "Начало сравнения...")
+            self._report(progress_reporter, 0, "Начало сравнения...")
 
-            # Определяем форматтер, если не указан
             if formatter_name is None:
                 formatter_name = self._determine_formatter(output_path)
                 self.logger.info(f"Автоматически выбран форматтер: {formatter_name}")
 
-            # 1. Загружаем файлы
-            self.logger.info(f"Загрузка файлов: {file1_path.name} и {file2_path.name}")
+            df1, df2 = self._load_pair(file1_path, file2_path, options)
+            self._report(progress_reporter, 20, "Файлы загружены")
 
-            loader1 = self._find_file_loader(file1_path)
-            loader2 = self._find_file_loader(file2_path)
-
-            df1 = loader1.load(file1_path, **options.get("loader_options", {}))
-            df2 = loader2.load(file2_path, **options.get("loader_options", {}))
-
-            if progress_reporter:
-                progress_reporter.report_progress(20, 100, "Файлы загружены")
-
-            # 2. Валидация
             self._validate_data(df1, df2)
+            self._report(progress_reporter, 30, "Валидация выполнена")
 
+            result = self._run_comparison(df1, df2, comparator_name, options)
+            self._report(progress_reporter, 70, "Сравнение выполнено")
+
+            self._run_formatter(result, output_path, formatter_name, file1_path, file2_path, options)
+            self._report(progress_reporter, 100, "Сравнение завершено")
             if progress_reporter:
-                progress_reporter.report_progress(30, 100, "Валидация выполнена")
-
-            # 3. Сравнение
-            comparator = self._get_comparator(comparator_name)
-            comparison_options = options.get("comparison_options", {})
-
-            # Добавляем опции из конфигурации
-            if self.config:
-                comparison_options.update(
-                    {
-                        "ignore_case": getattr(self.config.comparison, "ignore_case", False),
-                        "ignore_whitespace": getattr(
-                            self.config.comparison, "ignore_whitespace", False
-                        ),
-                    }
-                )
-
-            result = comparator.compare(df1, df2, **comparison_options)
-
-            if progress_reporter:
-                progress_reporter.report_progress(70, 100, "Сравнение выполнено")
-
-            # 4. Форматирование и сохранение
-            formatter = self._get_formatter(formatter_name)
-
-            format_options = options.get("format_options", {})
-            format_options.update({"file1_name": file1_path.stem, "file2_name": file2_path.stem})
-
-            formatter.format(result, output_path, **format_options)
-
-            if progress_reporter:
-                progress_reporter.report_progress(100, 100, "Сравнение завершено")
                 progress_reporter.report_completion(f"Результат сохранен в {output_path}")
 
             self.logger.info(f"Сравнение успешно завершено: {output_path}")
-
             return result
 
         except Exception as e:
@@ -185,6 +145,60 @@ class ComparisonEngine:
 
             self.logger.error(f"Ошибка при сравнении файлов: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def _report(
+        reporter: IProgressReporter | None, percent: int, message: str
+    ) -> None:
+        if reporter:
+            reporter.report_progress(percent, 100, message)
+
+    def _load_pair(
+        self, file1_path: Path, file2_path: Path, options: dict[str, Any]
+    ) -> tuple["pd.DataFrame", "pd.DataFrame"]:
+        self.logger.info(f"Загрузка файлов: {file1_path.name} и {file2_path.name}")
+        loader_options = options.get("loader_options", {})
+        loader1 = self._find_file_loader(file1_path)
+        loader2 = self._find_file_loader(file2_path)
+        df1 = loader1.load(file1_path, **loader_options)
+        df2 = loader2.load(file2_path, **loader_options)
+        return df1, df2
+
+    def _run_comparison(
+        self,
+        df1: "pd.DataFrame",
+        df2: "pd.DataFrame",
+        comparator_name: str,
+        options: dict[str, Any],
+    ) -> ComparisonResult:
+        comparator = self._get_comparator(comparator_name)
+        comparison_options: dict[str, Any] = dict(options.get("comparison_options", {}))
+        if self.config:
+            comparison_options.setdefault(
+                "ignore_case",
+                getattr(self.config.comparison, "ignore_case", False),
+            )
+            comparison_options.setdefault(
+                "ignore_whitespace",
+                getattr(self.config.comparison, "ignore_whitespace", False),
+            )
+        return comparator.compare(df1, df2, **comparison_options)
+
+    def _run_formatter(
+        self,
+        result: ComparisonResult,
+        output_path: Path,
+        formatter_name: str,
+        file1_path: Path,
+        file2_path: Path,
+        options: dict[str, Any],
+    ) -> None:
+        formatter = self._get_formatter(formatter_name)
+        format_options: dict[str, Any] = dict(options.get("format_options", {}))
+        format_options.update(
+            {"file1_name": file1_path.stem, "file2_name": file2_path.stem}
+        )
+        formatter.format(result, output_path, **format_options)
 
     def _find_file_loader(self, file_path: Path) -> IFileLoader:
         """Находит подходящий загрузчик для файла"""
