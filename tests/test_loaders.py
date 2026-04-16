@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -172,3 +173,281 @@ class TestExcelLoaderPreview:
         a, _ = identical_xlsx_pair
         df = excel_loader.preview_data(a, max_rows=2)
         assert len(df) == 2
+
+
+# ---------------------------------------------------------------------------
+# CSV loader — characterization tests (pin current behaviour for refactors)
+# ---------------------------------------------------------------------------
+
+
+class TestCSVLoaderEncodingDetection:
+    def test_load_windows_1251_cyrillic(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        # Confident chardet result for a cp1251 cyrillic payload.
+        f = tmp_path / "ru.csv"
+        f.write_bytes("имя,балл\nАлиса,10\nБорис,20\n".encode("cp1251"))
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["имя", "балл"]
+        assert df.iloc[0, 0] == "Алиса"
+
+    def test_load_utf8_with_bom_strips_bom_from_header(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "bom.csv"
+        f.write_bytes(b"\xef\xbb\xbfid,name\n1,Alice\n")
+        df = csv_loader.load(f)
+        # Pandas strips the BOM from the header; pin this contract.
+        assert list(df.columns) == ["id", "name"]
+        assert "\ufeff" not in "".join(df.columns)
+
+    def test_low_confidence_encoding_falls_back_to_utf8(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Force chardet to report low confidence → loader falls back to UTF-8.
+        import src.loaders.csv_loader as csv_mod
+
+        def fake_detect(_data: bytes) -> dict[str, Any]:
+            return {"encoding": "ISO-8859-7", "confidence": 0.1}
+
+        monkeypatch.setattr(csv_mod.chardet, "detect", fake_detect)
+        f = tmp_path / "low.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["id", "name"]
+
+    def test_detect_encoding_exception_falls_back_to_utf8(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Force the open() inside _detect_encoding to explode, proving the
+        # wrapper's except-clause returns "utf-8" without propagating.
+        import src.loaders.csv_loader as csv_mod
+
+        target = tmp_path / "boom.csv"
+        target.write_text("id,name\n1,A\n", encoding="utf-8")
+
+        def flaky_open(*_args: Any, **_kwargs: Any) -> Any:
+            raise OSError("simulated I/O failure during encoding detect")
+
+        # Injecting "open" as a module attribute shadows the builtin for code
+        # inside csv_mod without affecting the rest of the test process.
+        monkeypatch.setattr(csv_mod, "open", flaky_open, raising=False)
+        assert csv_loader._detect_encoding(target) == "utf-8"
+
+
+class TestCSVLoaderDelimiterDetection:
+    def test_auto_detect_semicolon(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "semi.csv"
+        f.write_text("id;name;score\n1;Alice;10\n2;Bob;20\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["id", "name", "score"]
+        assert len(df) == 2
+
+    def test_auto_detect_pipe(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "pipe.csv"
+        f.write_text("id|name|score\n1|Alice|10\n2|Bob|20\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["id", "name", "score"]
+        assert len(df) == 2
+
+    @pytest.mark.xfail(
+        reason=(
+            "bug B1 — _SEPARATOR_CANDIDATES stores '\\\\t' (literal two-char) instead of "
+            "a real tab. Tab-delimited .csv files miss the scorer and fall back to comma. "
+            "Fixed in the B.1 commit; this xfail flips to a positive assertion there."
+        ),
+        strict=True,
+    )
+    def test_auto_detect_tab_on_csv_extension(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "tabs.csv"
+        f.write_text("id\tname\tscore\n1\tAlice\t10\n2\tBob\t20\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["id", "name", "score"]
+        assert len(df) == 2
+
+    def test_tsv_extension_short_circuits_to_tab(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        # Pinned current behaviour: .tsv returns "\\t" from _detect_separator
+        # but pandas' engine="python" reinterprets it as the \t regex at load
+        # time, so the file loads correctly. After the B.1 fix this becomes a
+        # real tab string; the visible load outcome is unchanged.
+        f = tmp_path / "a.tsv"
+        f.write_text("id\tname\n1\tA\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["id", "name"]
+
+    def test_detect_separator_exception_returns_comma(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*_args: Any, **_kwargs: Any) -> list[str]:
+            raise RuntimeError("scanner bug")
+
+        monkeypatch.setattr(csv_loader, "_read_sample_lines", boom)
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        # Returns "," (the docstring contract); load still succeeds.
+        assert csv_loader._detect_separator(f, "utf-8") == ","
+
+    def test_single_column_file_falls_back_to_comma(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        # Every candidate sees avg == 1; _pick_best_separator skips all and
+        # returns the hard-coded "," default.
+        f = tmp_path / "single.csv"
+        f.write_text("solo\nfoo\nbar\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["solo"]
+        assert len(df) == 2
+
+
+class TestCSVLoaderInternalScoring:
+    """Direct unit tests on the scoring helpers — the only way to reach the
+    all-blank-lines branch (line 133) without triggering pandas' EmptyDataError
+    first through the public load() path.
+    """
+
+    def test_score_separators_blank_lines_returns_empty(self) -> None:
+        assert CSVFileLoader._score_separators(["", "", ""]) == {}
+
+    def test_score_separators_scores_each_candidate(self) -> None:
+        scores = CSVFileLoader._score_separators(["a,b,c", "1,2,3"])
+        assert "," in scores
+        avg, consistency = scores[","]
+        assert avg == 3.0
+        assert consistency == 1.0
+
+    def test_pick_best_separator_empty_scores_defaults_to_comma(self) -> None:
+        assert CSVFileLoader._pick_best_separator({}) == ","
+
+    def test_pick_best_separator_ignores_avg_le_one(self) -> None:
+        # Every candidate has avg <= 1 → "no usable separator" → "," fallback.
+        assert CSVFileLoader._pick_best_separator({",": (1.0, 1.0), ";": (1.0, 1.0)}) == ","
+
+    def test_pick_best_separator_picks_highest_value(self) -> None:
+        # avg * consistency: "," → 4.0, ";" → 2.0 → "," wins; also exercises
+        # the "not better than current best" loop branch for the second entry.
+        assert CSVFileLoader._pick_best_separator({",": (4.0, 1.0), ";": (2.0, 1.0)}) == ","
+
+
+class TestCSVLoaderErrorPaths:
+    def test_empty_file_raises_file_load_error(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "empty.csv"
+        f.write_bytes(b"")
+        with pytest.raises(FileLoadError, match="не содержит данных"):
+            csv_loader.load(f)
+
+    def test_header_only_file_raises_file_load_error(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "headonly.csv"
+        f.write_text("id,name\n", encoding="utf-8")
+        with pytest.raises(FileLoadError, match=r"пустой|не содержит"):
+            csv_loader.load(f)
+
+    def test_unicode_decode_error_wrapped(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Trick the loader into using the wrong encoding so pd.read_csv raises
+        # UnicodeDecodeError from within the engine.
+        monkeypatch.setattr(csv_loader, "_detect_encoding", lambda _p: "ascii")
+        f = tmp_path / "cyr.csv"
+        f.write_bytes("имя,балл\nАлиса,10\n".encode("cp1251"))
+        with pytest.raises(FileLoadError, match="Ошибка кодировки"):
+            csv_loader.load(f)
+
+    def test_parser_error_wrapped(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.loaders.csv_loader as csv_mod
+
+        def raise_parser(*_args: Any, **_kwargs: Any) -> pd.DataFrame:
+            raise pd.errors.ParserError("simulated bad CSV")
+
+        monkeypatch.setattr(csv_mod.pd, "read_csv", raise_parser)
+        f = tmp_path / "bad.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        with pytest.raises(FileLoadError, match="парсинга CSV"):
+            csv_loader.load(f)
+
+    def test_generic_exception_wrapped(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import src.loaders.csv_loader as csv_mod
+
+        def raise_os(*_args: Any, **_kwargs: Any) -> pd.DataFrame:
+            raise OSError("disk melted")
+
+        monkeypatch.setattr(csv_mod.pd, "read_csv", raise_os)
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        with pytest.raises(FileLoadError, match="disk melted"):
+            csv_loader.load(f)
+
+    def test_preview_data_exception_returns_empty_df(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*_args: Any, **_kwargs: Any) -> str:
+            raise RuntimeError("detect failed")
+
+        monkeypatch.setattr(csv_loader, "_detect_encoding", boom)
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        df = csv_loader.preview_data(f)
+        assert df.empty
+
+    def test_analyze_file_structure_exception_returns_empty_dict(
+        self, csv_loader: CSVFileLoader, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(*_args: Any, **_kwargs: Any) -> str:
+            raise RuntimeError("detect failed")
+
+        monkeypatch.setattr(csv_loader, "_detect_encoding", boom)
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        assert csv_loader.analyze_file_structure(f) == {}
+
+
+class TestCSVLoaderParamPassthrough:
+    def test_header_none_assigns_integer_columns(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "noheader.csv"
+        f.write_text("1,Alice\n2,Bob\n", encoding="utf-8")
+        df = csv_loader.load(f, header=None)
+        # Pandas labels columns 0, 1 when header=None.
+        assert list(df.columns) == [0, 1]
+        assert len(df) == 2
+
+    def test_skiprows_drops_leading_rows(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "skip.csv"
+        f.write_text("junk line\nmore junk\nid,name\n1,A\n2,B\n", encoding="utf-8")
+        df = csv_loader.load(f, skiprows=2)
+        assert list(df.columns) == ["id", "name"]
+        assert len(df) == 2
+
+    def test_nrows_limits_rows(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "big.csv"
+        f.write_text("id,name\n1,A\n2,B\n3,C\n", encoding="utf-8")
+        df = csv_loader.load(f, nrows=1)
+        assert len(df) == 1
+
+    def test_comment_lines_skipped(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
+        f = tmp_path / "commented.csv"
+        f.write_text("id,name\n# this is a comment\n1,A\n2,B\n", encoding="utf-8")
+        df = csv_loader.load(f, comment="#")
+        assert len(df) == 2
+
+    def test_disallowed_kwarg_silently_dropped(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        # `engine` is not in allowed_params; the loader fixes it to "python"
+        # and never forwards user-supplied engines. Pin this contract: a user
+        # asking for engine="c" should not crash and not change the parser.
+        f = tmp_path / "a.csv"
+        f.write_text("id,name\n1,A\n", encoding="utf-8")
+        df = csv_loader.load(f, engine="c")
+        assert list(df.columns) == ["id", "name"]
+        assert len(df) == 1
