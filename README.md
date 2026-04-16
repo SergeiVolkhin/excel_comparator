@@ -39,10 +39,69 @@ python main.py
 
 ## 📋 Системные требования
 
-- **Python**: 3.8 или выше
+- **Python**: **3.11 или выше** (см. `pyproject.toml`, `requires-python = ">=3.11"`)
 - **ОС**: Windows, macOS, Linux
-- **ОЗУ**: минимум 512 МБ (рекомендуется 2 ГБ для больших файлов)
+- **ОЗУ**: минимум 512 МБ (рекомендуется 2 ГБ для больших файлов;
+  с опцией `read_only=True` можно обрабатывать и более крупные —
+  см. раздел «Большие файлы»).
 - **Дисковое пространство**: 100 МБ
+
+### Установка для разработки
+
+```bash
+git clone https://github.com/SergeiVolkhin/excel_comparator.git
+cd excel_comparator
+python -m venv .venv
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
+pip install -r requirements-dev.txt
+pre-commit install   # один раз на клон
+```
+
+### Проверки качества
+
+```bash
+pytest tests/ -q --ignore=tests/test_benchmarks.py     # unit + property + snapshot
+pytest tests/ --cov=src --cov-branch                   # с покрытием (цель ≥ 85%)
+ruff check src/ tests/ && ruff format --check src/ tests/
+mypy src/                                              # strict режим через pyproject.toml
+pytest tests/test_benchmarks.py --benchmark-only       # производительность
+```
+
+CI (GitHub Actions) прогоняет те же проверки на Python 3.11 / 3.12 / 3.13
+при каждом push и PR в `main`.
+
+## 🚀 Большие файлы
+
+`ExcelFileLoader.load()` принимает опцию `read_only=True`, которая
+стримит `.xlsx` через `openpyxl` в потоковом режиме — подходит для
+файлов, которые не помещаются в память целиком.
+
+```python
+from pathlib import Path
+from src.loaders.excel_loader import ExcelFileLoader
+
+loader = ExcelFileLoader()
+df = loader.load(Path("huge.xlsx"), read_only=True)
+```
+
+Замеры на 10k × 5 xlsx (baseline → после оптимизации):
+
+| Операция                  | Было   | Стало  | Δ     |
+|---------------------------|-------:|-------:|------:|
+| `ExcelFileLoader.load`    | 193 мс | 164 мс | −15 % |
+| `ExcelOutputFormatter`    | 1003 мс| 681 мс | −32 % |
+| `engine.compare_files`    | 1397 мс| 1087 мс| −22 % |
+
+Re-run бенчмарков:
+
+```bash
+pytest tests/test_benchmarks.py --benchmark-only \
+    --benchmark-compare=0001_baseline --benchmark-columns=min,mean,max
+```
 
 ## 🎯 Режимы сравнения
 
