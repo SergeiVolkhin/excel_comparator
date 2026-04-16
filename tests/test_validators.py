@@ -112,3 +112,104 @@ class TestFactory:
     def test_strict_includes_type_check(self) -> None:
         rules = ValidationRuleFactory.create_strict_validators()
         assert any(isinstance(r, DataTypeValidationRule) for r in rules)
+
+    def test_for_csv_extends_standard_with_csv_rules(self) -> None:
+        from src.validators.csv_validators import (
+            CSVRowCountRatioValidator,
+            CSVSingleColumnCollapseValidator,
+        )
+
+        rules = ValidationRuleFactory.for_csv()
+        assert any(isinstance(r, CSVRowCountRatioValidator) for r in rules)
+        assert any(isinstance(r, CSVSingleColumnCollapseValidator) for r in rules)
+        # Plus all standard rules still present.
+        assert any(isinstance(r, ShapeValidationRule) for r in rules)
+
+
+class TestCSVRowCountRatio:
+    def test_equal_sizes_no_error(self) -> None:
+        from src.validators.csv_validators import CSVRowCountRatioValidator
+
+        df = pd.DataFrame({"a": range(50)})
+        assert CSVRowCountRatioValidator().validate(df, df.copy()) == []
+
+    def test_modest_imbalance_no_error(self) -> None:
+        from src.validators.csv_validators import CSVRowCountRatioValidator
+
+        df1 = pd.DataFrame({"a": range(100)})
+        df2 = pd.DataFrame({"a": range(500)})  # 5x
+        assert CSVRowCountRatioValidator().validate(df1, df2) == []
+
+    def test_huge_imbalance_reported(self) -> None:
+        from src.validators.csv_validators import CSVRowCountRatioValidator
+
+        df1 = pd.DataFrame({"a": [1]})
+        df2 = pd.DataFrame({"a": range(500)})  # 500x
+        errors = CSVRowCountRatioValidator().validate(df1, df2)
+        assert len(errors) == 1
+        assert "разделитель" in errors[0]
+
+    def test_empty_side_silent(self) -> None:
+        from src.validators.csv_validators import CSVRowCountRatioValidator
+
+        df1 = pd.DataFrame({"a": []})
+        df2 = pd.DataFrame({"a": range(500)})
+        # EmptyDataValidationRule handles empty-data; this rule stays silent.
+        assert CSVRowCountRatioValidator().validate(df1, df2) == []
+
+    def test_custom_threshold(self) -> None:
+        from src.validators.csv_validators import CSVRowCountRatioValidator
+
+        df1 = pd.DataFrame({"a": [1]})
+        df2 = pd.DataFrame({"a": [1, 2, 3, 4, 5]})  # 5x
+        rule = CSVRowCountRatioValidator(max_ratio=3.0)
+        assert rule.validate(df1, df2)  # triggers at 3x threshold
+
+    def test_rule_name(self) -> None:
+        from src.validators.csv_validators import CSVRowCountRatioValidator
+
+        assert "CSV" in CSVRowCountRatioValidator().get_rule_name()
+
+
+class TestCSVSingleColumnCollapse:
+    def test_well_structured_two_column_no_error(self) -> None:
+        from src.validators.csv_validators import CSVSingleColumnCollapseValidator
+
+        df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+        assert CSVSingleColumnCollapseValidator().validate(df, df.copy()) == []
+
+    def test_collapsed_column_with_commas_reported(self) -> None:
+        from src.validators.csv_validators import CSVSingleColumnCollapseValidator
+
+        collapsed = pd.DataFrame({"id,name,score": ["1,A,10", "2,B,20", "3,C,30"]})
+        clean = pd.DataFrame({"id": [1, 2, 3]})
+        errors = CSVSingleColumnCollapseValidator().validate(collapsed, clean)
+        assert len(errors) == 1
+        assert "первом" in errors[0]
+
+    def test_numeric_single_column_not_collapsed(self) -> None:
+        # A single numeric column is normal (e.g. a list of IDs) and must
+        # not trigger the heuristic.
+        from src.validators.csv_validators import CSVSingleColumnCollapseValidator
+
+        df = pd.DataFrame({"id": [1, 2, 3, 4, 5]})
+        assert CSVSingleColumnCollapseValidator().validate(df, df.copy()) == []
+
+    def test_single_string_column_without_delimiters_clean(self) -> None:
+        from src.validators.csv_validators import CSVSingleColumnCollapseValidator
+
+        df = pd.DataFrame({"name": ["Alice", "Bob", "Charlie"]})
+        assert CSVSingleColumnCollapseValidator().validate(df, df.copy()) == []
+
+    def test_both_sides_collapsed_two_errors(self) -> None:
+        from src.validators.csv_validators import CSVSingleColumnCollapseValidator
+
+        a = pd.DataFrame({"a,b": ["1,2", "3,4"]})
+        b = pd.DataFrame({"c;d": ["5;6", "7;8"]})
+        errors = CSVSingleColumnCollapseValidator().validate(a, b)
+        assert len(errors) == 2
+
+    def test_rule_name(self) -> None:
+        from src.validators.csv_validators import CSVSingleColumnCollapseValidator
+
+        assert "CSV" in CSVSingleColumnCollapseValidator().get_rule_name()

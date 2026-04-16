@@ -233,3 +233,15 @@ class ValidationRuleFactory:
             DataTypeValidationRule(check_compatibility=True),
             SizeValidationRule(max_rows=50000, max_columns=500),
         ]
+
+    @staticmethod
+    def for_csv(config: Any = None) -> list[IValidationRule]:
+        """Standard set plus CSV-specific validators (row-count ratio and
+        single-column collapse). Callers opt in explicitly; the default
+        engine composition stays empty."""
+        from .csv_validators import create_csv_validators
+
+        return [
+            *ValidationRuleFactory.create_standard_validators(config),
+            *create_csv_validators(),
+        ]
