@@ -68,6 +68,17 @@ class TestKeyColumns:
         with pytest.raises(ComparisonError, match="Ключевые"):
             comp.compare(df1, df2, key_columns=["missing"])
 
+    def test_valid_key_columns_logs_warning(
+        self, comp: AdvancedComparator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Regression for TODO_bugs.md #4: key_columns path must log a
+        warning about the not-yet-implemented cell-level alignment."""
+        df1 = pd.DataFrame({"id": [1, 2], "v": [10, 20]})
+        df2 = pd.DataFrame({"id": [1, 2], "v": [10, 20]})
+        with caplog.at_level("WARNING", logger="AdvancedComparator"):
+            comp.compare(df1, df2, key_columns=["id"])
+        assert any("key_columns" in rec.message for rec in caplog.records)
+
 
 class TestSummary:
     def test_summary_includes_structural(self, comp: AdvancedComparator) -> None:

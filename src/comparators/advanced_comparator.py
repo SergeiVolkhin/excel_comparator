@@ -38,7 +38,11 @@ class AdvancedComparator(IComparator):
             **options: Дополнительные параметры
                 - ignore_case: Игнорировать регистр строк
                 - ignore_whitespace: Игнорировать пробелы в начале и конце строк
-                - key_columns: Список столбцов для сопоставления строк (если не указан, сравнение построчное)
+                - key_columns: Список столбцов-ключей. **ОГРАНИЧЕНИЕ**:
+                  при указании key_columns row-статистика считается по
+                  ключам, но фактическое cell-level сравнение по-прежнему
+                  выполняется построчно (по индексу). Полноценное выравнивание
+                  по ключам — planned feature, см. TODO_bugs.md #4.
 
         Returns:
             ComparisonResult: Результат сравнения
@@ -162,8 +166,17 @@ class AdvancedComparator(IComparator):
                     f"Ключевые столбцы {missing_keys} отсутствуют в общих столбцах"
                 )
 
-            # Выравниваем по ключевым столбцам с использованием merge
-            # Создаем индикаторы для отслеживания источника строк
+            # Key-based alignment is not yet implemented: we compute row-level
+            # statistics via an outer merge but fall back to positional
+            # comparison for the actual cell-level mask. Warn the caller so
+            # the limitation is explicit (TODO_bugs.md #4).
+            self.logger.warning(
+                "key_columns=%s: statistics are key-based, but cell-level "
+                "comparison still uses row-index alignment. Key-based "
+                "alignment is not yet implemented.",
+                key_columns,
+            )
+
             merge_result = pd.merge(
                 df1_aligned,
                 df2_aligned,
@@ -173,17 +186,11 @@ class AdvancedComparator(IComparator):
                 suffixes=("_df1", "_df2"),
             )
 
-            # Подсчитываем статистику по строкам
             merge_counts = merge_result["_merge"].value_counts()
-            row_stats["only_in_df1"] = merge_counts.get("left_only", 0)
-            row_stats["only_in_df2"] = merge_counts.get("right_only", 0)
-            row_stats["common"] = merge_counts.get("both", 0)
+            row_stats["only_in_df1"] = int(merge_counts.get("left_only", 0))
+            row_stats["only_in_df2"] = int(merge_counts.get("right_only", 0))
+            row_stats["common"] = int(merge_counts.get("both", 0))
 
-            # Создаем новые выровненные DataFrame с NaN для отсутствующих значений
-            # Тут требуется реконструкция, что достаточно сложно
-            # В реальном приложении потребуется более сложная логика
-
-            # Для демонстрации просто используем потоковую обработку
             return df1_aligned, df2_aligned, column_stats, row_stats
         else:
             # Выравнивание по индексу (построчное сравнение)
