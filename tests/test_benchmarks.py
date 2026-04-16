@@ -62,6 +62,14 @@ class TestLoaderBenchmarks:
         df = benchmark(loader.load, a)
         assert len(df) == 10_000
 
+    def test_excel_load_10k_rows_readonly(
+        self, benchmark, medium_xlsx_pair: tuple[Path, Path]
+    ) -> None:
+        loader = ExcelFileLoader()
+        a, _ = medium_xlsx_pair
+        df = benchmark(loader.load, a, read_only=True)
+        assert len(df) == 10_000
+
 
 class TestComparatorBenchmarks:
     def test_basic_compare_10k_rows(
