@@ -61,15 +61,6 @@ filterwarnings = [
     "ignore::DeprecationWarning:openpyxl.*",
     "ignore::DeprecationWarning:pandas.*",
     "ignore::UserWarning:openpyxl.*",
-    # TODO(refactor): pandas FutureWarnings below stem from known latent
-    # bugs in src/comparators (fillna with object-sentinel, chained astype).
-    # Will be addressed in phase 2 via separate fix: commits. Whitelisting
-    # here so characterization tests can freeze current behavior first.
-    "ignore::FutureWarning:pandas.*",
-    "ignore::FutureWarning:src.comparators.*",
-    # TODO(fix): pd.ExcelFile not closed in ExcelFileLoader.get_sheet_names.
-    # Tracked in TODO_bugs.md, fixed separately.
-    "ignore::pytest.PytestUnraisableExceptionWarning",
 ]
 markers = [
     "slow: smoke/perf tests on large generated files",

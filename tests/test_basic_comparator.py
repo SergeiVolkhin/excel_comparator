@@ -58,6 +58,19 @@ class TestCompareNaN:
         result = comp.compare(df1, df2)
         assert result.differences_mask.sum().sum() == 1
 
+    def test_no_future_warning_on_object_columns(self, comp: BasicComparator) -> None:
+        """Regression for TODO_bugs.md #2: fillna(object_sentinel) used to
+        emit FutureWarning on object-dtype NaN handling. The new mask
+        builder must not emit any warning."""
+        import warnings
+
+        df1 = pd.DataFrame({"s": ["a", None, "c"], "n": [1, None, 3]})
+        df2 = pd.DataFrame({"s": ["a", None, "c"], "n": [1, None, 3]})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = comp.compare(df1, df2)
+        assert result.differences_mask.sum().sum() == 0
+
 
 class TestCompareOptions:
     def test_ignore_case(self, comp: BasicComparator) -> None:
