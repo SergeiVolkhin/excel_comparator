@@ -37,11 +37,19 @@ into refactor work.
   both cheaper and semantically correct. Regression test added in
   `tests/test_basic_comparator.py::test_ignore_case_preserves_numeric_columns`.
 
-## 4. `AdvancedComparator.align_dataframes` with `key_columns` — result ignored
+## 4. `AdvancedComparator.align_dataframes` with `key_columns` — result ignored  ⚠️ DOCUMENTED / PARTIAL
 - File: `src/comparators/advanced_comparator.py:156-176`
 - Symptom: when `key_columns` is provided, code performs an outer merge
   but discards the merged frame and returns the original aligned ones.
   Row statistics are populated, but cell-level comparison is not actually
   key-based.
-- Fix: either implement key-based alignment properly or remove the
-  misleading `key_columns` option.
+- Status: limitation is now **explicit**, not silent:
+  - `AdvancedComparator.compare` docstring calls out the limitation
+    ("row-статистика считается по ключам, но фактическое cell-level
+    сравнение по-прежнему выполняется построчно (по индексу)").
+  - `align_dataframes` logs a WARNING via `self.logger.warning(...)`
+    when key_columns is provided, naming the feature as planned.
+  - Regression test:
+    `tests/test_advanced_comparator.py::TestKeyColumns::test_valid_key_columns_logs_warning`.
+- Follow-up: implementing true key-based cell-level alignment is a
+  separate feature, not a bug fix.
