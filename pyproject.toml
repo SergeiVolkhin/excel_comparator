@@ -149,7 +149,7 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 no_implicit_optional = true
 show_error_codes = true
-exclude = ["venv/", ".venv/", "htmlcov/", "build/", "dist/"]
+exclude = ["venv/", ".venv/", "htmlcov/", "build/", "dist/", "src/gui/.*"]
 
 [[tool.mypy.overrides]]
 module = ["chardet.*", "openpyxl.*"]

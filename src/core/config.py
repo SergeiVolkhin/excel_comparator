@@ -93,7 +93,7 @@ class AppConfig:
     max_recent_files: int = 10
     config_format: ConfigFormat = ConfigFormat.JSON
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Инициализация после создания объекта"""
         self.logger = logging.getLogger(self.__class__.__name__)
 

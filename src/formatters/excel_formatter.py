@@ -22,7 +22,7 @@ class ExcelOutputFormatter(IOutputFormatter):
 
     SUPPORTED_FORMATS: ClassVar[list[str]] = [".xlsx"]
 
-    def __init__(self, config=None):
+    def __init__(self, config: Any = None) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config = config
 
@@ -58,7 +58,9 @@ class ExcelOutputFormatter(IOutputFormatter):
             BasicDifferenceAnalyzer(),
         ]
 
-    def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
+    def format(
+        self, result: ComparisonResult, output_path: Path, **options: Any
+    ) -> None:
         """Форматирует и сохраняет результат сравнения в Excel"""
         try:
             self.logger.info(f"Создание Excel отчета: {output_path}")
@@ -89,7 +91,7 @@ class ExcelOutputFormatter(IOutputFormatter):
         return self.SUPPORTED_FORMATS.copy()
 
     def _add_comparison_sheets(
-        self, workbook: Workbook, result: ComparisonResult, options: dict
+        self, workbook: Workbook, result: ComparisonResult, options: dict[str, Any]
     ) -> None:
         """Добавляет листы с результатами сравнения"""
         file1_name = options.get("file1_name", "Файл 1")
@@ -136,10 +138,10 @@ class ExcelOutputFormatter(IOutputFormatter):
             cell.border = self.thin_border
 
         # Применяем подсветку к различающимся ячейкам
-        for row_idx, row in mask.iterrows():
+        for row_pos, (_, row) in enumerate(mask.iterrows()):
             for col_idx, is_different in enumerate(row):
                 if is_different:
-                    cell = worksheet.cell(row=row_idx + 2, column=col_idx + 1)
+                    cell = worksheet.cell(row=row_pos + 2, column=col_idx + 1)
                     cell.fill = self.highlight_fill
                     cell.border = self.thin_border
 
@@ -248,7 +250,7 @@ class ExcelOutputFormatter(IOutputFormatter):
         # Автоподбор ширины столбцов
         self._auto_adjust_columns(worksheet)
 
-    def _auto_adjust_columns(self, worksheet) -> None:
+    def _auto_adjust_columns(self, worksheet: Any) -> None:
         """Автоматически подбирает ширину столбцов"""
         for column in worksheet.columns:
             max_length = 0

@@ -4,6 +4,12 @@
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from .config import AppConfig
 
 from ..comparators.advanced_comparator import AdvancedComparator
 from ..comparators.basic_comparator import BasicComparator
@@ -25,7 +31,7 @@ from .interfaces import (
 class ComparisonEngine:
     """Основной движок для сравнения файлов"""
 
-    def __init__(self, config=None):
+    def __init__(self, config: "AppConfig | None" = None) -> None:
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -106,7 +112,7 @@ class ComparisonEngine:
         comparator_name: str = "advanced",  # По умолчанию используем улучшенный компаратор
         formatter_name: str | None = None,  # Автоопределение по расширению
         progress_reporter: IProgressReporter | None = None,
-        **options,
+        **options: Any,
     ) -> ComparisonResult:
         """Выполняет полное сравнение файлов"""
 
@@ -209,9 +215,9 @@ class ComparisonEngine:
 
         return self._formatters[name]
 
-    def _validate_data(self, df1, df2) -> None:
+    def _validate_data(self, df1: "pd.DataFrame", df2: "pd.DataFrame") -> None:
         """Выполняет валидацию данных"""
-        errors = []
+        errors: list[str] = []
 
         for rule in self._validation_rules:
             rule_errors = rule.validate(df1, df2)
@@ -224,7 +230,7 @@ class ComparisonEngine:
 class StandardComparisonStrategy(IComparisonStrategy):
     """Стандартная стратегия сравнения"""
 
-    def __init__(self, engine: ComparisonEngine):
+    def __init__(self, engine: ComparisonEngine) -> None:
         self.engine = engine
         self.logger = logging.getLogger(self.__class__.__name__)
 
@@ -234,7 +240,7 @@ class StandardComparisonStrategy(IComparisonStrategy):
         file2: Path,
         output: Path,
         progress_reporter: IProgressReporter | None = None,
-        **options,
+        **options: Any,
     ) -> ComparisonResult:
         """Выполняет стандартное сравнение файлов"""
         # Устанавливаем компаратор по умолчанию, если не указан
