@@ -42,14 +42,31 @@ def build_differences_mask(
 ) -> pd.DataFrame:
     """Build a boolean DataFrame indicating cell-by-cell differences.
 
-    NaN vs NaN is treated as equal (not a difference), matching the
-    original object-sentinel behaviour without triggering pandas'
-    FutureWarning from ``fillna(object_sentinel)``. The ``na_marker``
-    parameter is accepted but ignored; kept for backward compatibility
-    with callers that passed the old sentinel.
+    NA-safe across object columns containing ``pd.NA``, ``numpy.nan`` in
+    float columns, and pandas nullable dtypes (``Int64``/``Float64``/
+    ``boolean``/``string``). ``NA vs NA`` is treated as equal; exactly
+    one NA on one side counts as a difference.
+
+    A raw ``df1.values != df2.values`` raises
+    ``TypeError: boolean value of NA is ambiguous`` when object columns
+    contain ``pd.NA`` (seen after ``AdvancedComparator.align_dataframes``
+    calls ``reindex(..., fill_value=pd.NA)`` on mismatched row counts).
+    We use pandas' NA-aware ``DataFrame.ne`` and mask away any cell
+    where either side is NA, then OR in a one-side-NA mask. Vectorised;
+    no per-cell Python; does not reintroduce the forbidden
+    ``fillna(object_sentinel)`` pattern.
+
+    The legacy ``na_marker`` parameter is accepted but ignored; kept for
+    backward compatibility with callers that passed the old sentinel.
     """
-    del na_marker  # legacy API param; no longer needed
-    both_na = df1.isna().values & df2.isna().values
-    values_differ = df1.values != df2.values
-    mask_values = values_differ & ~both_na
-    return pd.DataFrame(mask_values, columns=df1.columns, index=df1.index)
+    del na_marker
+    mask1_na = df1.isna()
+    mask2_na = df2.isna()
+    one_side_na = mask1_na ^ mask2_na
+    both_present = ~(mask1_na | mask2_na)
+    ne = df1.ne(df2)
+    differ = ne.where(both_present, other=False).astype(bool)
+    result = differ | one_side_na
+    result.index = df1.index
+    result.columns = df1.columns
+    return result
