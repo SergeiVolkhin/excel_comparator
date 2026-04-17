@@ -477,13 +477,15 @@ class TestCSVLoaderChunkedPath:
     def test_chunked_path_on_120mb_file(self, csv_loader: CSVFileLoader, tmp_path: Path) -> None:
         import pandas as pd
 
-        # Generate a CSV that comfortably exceeds the 100 MB threshold.
-        # At ~90 bytes per row, 1.5M rows lands around 135 MB.
+        # Row layout: id (1-7 chars) + "," + "payload-NNNNNNNN-" (17 chars)
+        # + 72-byte filler + "\n" -> ~97 bytes/row. 1.5M rows -> ~138 MB,
+        # comfortably over the 100 MB chunk-threshold.
         n_rows = 1_500_000
+        filler = "x" * 72
         src = pd.DataFrame(
             {
                 "id": range(n_rows),
-                "value": [f"payload-{i:08d}" for i in range(n_rows)],
+                "value": [f"payload-{i:08d}-{filler}" for i in range(n_rows)],
             }
         )
         f = tmp_path / "big.csv"
