@@ -34,6 +34,7 @@ class TestArgumentParsing:
         assert args.csv_delimiter is None
         assert args.csv_skip_rows is None
         assert args.chunk_size is None
+        assert args.csv_on_bad_lines is None
 
     def test_format_choice_accepted(self, patch_argv: Any) -> None:
         patch_argv(
@@ -74,6 +75,8 @@ class TestArgumentParsing:
                 "3",
                 "--chunk-size",
                 "10000",
+                "--csv-on-bad-lines",
+                "skip",
             ]
         )
         args = cli_main.parse_arguments()
@@ -81,6 +84,7 @@ class TestArgumentParsing:
         assert args.csv_delimiter == ";"
         assert args.csv_skip_rows == 3
         assert args.chunk_size == 10000
+        assert args.csv_on_bad_lines == "skip"
 
 
 class TestRunCLIMode:
@@ -102,6 +106,7 @@ class TestRunCLIMode:
             csv_delimiter=None,
             csv_skip_rows=None,
             chunk_size=None,
+            csv_on_bad_lines=None,
             log_level="INFO",
         )
         defaults.update(overrides)

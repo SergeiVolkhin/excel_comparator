@@ -495,3 +495,33 @@ class TestCSVLoaderChunkedPath:
         df = csv_loader.load(f)
         assert len(df) == n_rows
         assert df.iloc[n_rows // 2]["id"] == n_rows // 2
+
+
+class TestCSVLoaderOnBadLines:
+    @pytest.fixture
+    def bad_csv(self, tmp_path: Path) -> Path:
+        p = tmp_path / "bad.csv"
+        p.write_text("a,b,c\n1,2,3\n4,5,6,7,8\n9,10,11\n", encoding="utf-8")
+        return p
+
+    def test_default_raises_with_line_number_and_hint(self, bad_csv: Path) -> None:
+        loader = CSVFileLoader()
+        with pytest.raises(FileLoadError) as exc:
+            loader.load(bad_csv)
+        msg = str(exc.value)
+        assert "line 3" in msg
+        assert "--csv-on-bad-lines skip" in msg
+
+    def test_skip_returns_clean_dataframe(self, bad_csv: Path) -> None:
+        loader = CSVFileLoader()
+        df = loader.load(bad_csv, on_bad_lines="skip")
+        assert df.shape == (2, 3)
+        assert df["a"].tolist() == [1, 9]
+
+    def test_warn_mode_emits_parser_warning(self, bad_csv: Path) -> None:
+        # Suite runs under filterwarnings=error; pytest.warns catches the
+        # ParserWarning explicitly so 'warn' can still be covered here.
+        loader = CSVFileLoader()
+        with pytest.warns(pd.errors.ParserWarning):
+            df = loader.load(bad_csv, on_bad_lines="warn")
+        assert df.shape == (2, 3)

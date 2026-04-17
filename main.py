@@ -113,6 +113,18 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--csv-on-bad-lines",
+        type=str,
+        choices=["error", "skip", "warn"],
+        default=None,
+        help=(
+            "Что делать со сломанными строками в CSV: error (по умолчанию, "
+            "прервать с ошибкой), skip (пропустить молча), warn (пропустить "
+            "и вывести предупреждение)."
+        ),
+    )
+
+    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -243,6 +255,8 @@ def run_cli_mode(args):
             loader_options["skiprows"] = args.csv_skip_rows
         if args.chunk_size is not None:
             loader_options["chunk_size"] = args.chunk_size
+        if args.csv_on_bad_lines is not None:
+            loader_options["on_bad_lines"] = args.csv_on_bad_lines
 
         # CLI --format uses user-facing extension labels; the engine's
         # formatter registry keys them differently for xlsx.

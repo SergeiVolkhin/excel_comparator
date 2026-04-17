@@ -59,6 +59,11 @@ class CSVFileLoader(IFileLoader):
             chunk_size: int — rows per chunk when the file size exceeds
                 ``_CHUNK_THRESHOLD_BYTES`` (100 MB). Default 50 000. Lower
                 values reduce peak memory at the cost of more concat work.
+            on_bad_lines: {'error', 'skip', 'warn'} | callable — how to
+                handle malformed rows. Default ``'error'`` (raises
+                ``FileLoadError`` with a hint). ``'skip'`` drops the
+                offending line silently; ``'warn'`` drops it and emits a
+                pandas ``ParserWarning``.
 
         Any kwarg not in the allowlist (see ``_prepare_load_params``) is
         dropped silently. ``engine`` is pinned to ``\"python\"`` by this
@@ -119,7 +124,15 @@ class CSVFileLoader(IFileLoader):
         except pd.errors.EmptyDataError as e:
             raise FileLoadError(str(file_path), "Файл не содержит данных") from e
         except pd.errors.ParserError as e:
-            raise FileLoadError(str(file_path), f"Ошибка парсинга CSV: {e}") from e
+            hint = (
+                ""
+                if kwargs.get("on_bad_lines") in ("skip", "warn")
+                else (
+                    " Подсказка: повторите запуск с --csv-on-bad-lines skip, "
+                    "чтобы пропустить повреждённые строки."
+                )
+            )
+            raise FileLoadError(str(file_path), f"Ошибка парсинга CSV: {e}.{hint}") from e
         except Exception as e:
             self.logger.error(f"Ошибка загрузки CSV файла {file_path}: {e}")
             raise FileLoadError(str(file_path), str(e)) from e
@@ -233,6 +246,7 @@ class CSVFileLoader(IFileLoader):
             "date_parser",
             "dayfirst",
             "cache_dates",
+            "on_bad_lines",
         ]
 
         for param in allowed_params:
