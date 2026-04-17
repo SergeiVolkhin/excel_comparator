@@ -47,26 +47,36 @@ def build_differences_mask(
     ``boolean``/``string``). ``NA vs NA`` is treated as equal; exactly
     one NA on one side counts as a difference.
 
-    A raw ``df1.values != df2.values`` raises
-    ``TypeError: boolean value of NA is ambiguous`` when object columns
-    contain ``pd.NA`` (seen after ``AdvancedComparator.align_dataframes``
-    calls ``reindex(..., fill_value=pd.NA)`` on mismatched row counts).
-    We use pandas' NA-aware ``DataFrame.ne`` and mask away any cell
-    where either side is NA, then OR in a one-side-NA mask. Vectorised;
-    no per-cell Python; does not reintroduce the forbidden
-    ``fillna(object_sentinel)`` pattern.
+    Uses a fast numpy path for the common case (no ``pd.NA`` present),
+    falling back to an NA-aware pandas path only when numpy raises
+    ``TypeError: boolean value of NA is ambiguous`` — which happens when
+    object columns contain ``pd.NA`` (e.g. after
+    ``AdvancedComparator.align_dataframes`` calls
+    ``reindex(..., fill_value=pd.NA)`` on mismatched row counts). The
+    fallback uses ``DataFrame.ne`` + ``.where(both_present, False)`` and
+    does **not** reintroduce the forbidden ``fillna(object_sentinel)``
+    pattern.
 
     The legacy ``na_marker`` parameter is accepted but ignored; kept for
     backward compatibility with callers that passed the old sentinel.
     """
     del na_marker
-    mask1_na = df1.isna()
-    mask2_na = df2.isna()
-    one_side_na = mask1_na ^ mask2_na
-    both_present = ~(mask1_na | mask2_na)
-    ne = df1.ne(df2)
-    differ = ne.where(both_present, other=False).astype(bool)
-    result = differ | one_side_na
-    result.index = df1.index
-    result.columns = df1.columns
-    return result
+    try:
+        both_na = df1.isna().values & df2.isna().values
+        values_differ = df1.values != df2.values
+        mask_values = values_differ & ~both_na
+        return pd.DataFrame(mask_values, columns=df1.columns, index=df1.index)
+    except TypeError:
+        # Object column contains pd.NA — numpy cannot reduce it to bool.
+        # NA-aware pandas path: exactly-one-side-NA is always a difference;
+        # both-NA is equal; otherwise compare normally.
+        mask1_na = df1.isna()
+        mask2_na = df2.isna()
+        one_side_na = mask1_na ^ mask2_na
+        both_present = ~(mask1_na | mask2_na)
+        ne = df1.ne(df2)
+        differ = ne.where(both_present, other=False).astype(bool)
+        result = differ | one_side_na
+        result.index = df1.index
+        result.columns = df1.columns
+        return result
