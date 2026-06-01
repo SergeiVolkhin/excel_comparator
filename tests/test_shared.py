@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.comparators._shared import build_differences_mask
+from src.comparators._shared import build_differences_mask, safe_ne
 
 
 class TestBuildDifferencesMaskNASafety:
@@ -50,3 +50,13 @@ class TestBuildDifferencesMaskNASafety:
         df2 = pd.DataFrame({"a": [1, 3]})
         m = build_differences_mask(df1, df2, na_marker="__NA__")
         assert m["a"].tolist() == [False, True]
+
+
+class TestSafeNeAlias:
+    def test_matches_build_differences_mask_with_na(self) -> None:
+        df1 = pd.DataFrame({"a": ["x", pd.NA, "y"]}, dtype=object)
+        df2 = pd.DataFrame({"a": ["x", "q", pd.NA]}, dtype=object)
+        expected = build_differences_mask(df1, df2)
+        result = safe_ne(df1, df2)
+        assert result.equals(expected)
+        assert result["a"].tolist() == [False, True, True]

@@ -80,3 +80,16 @@ def build_differences_mask(
         result.index = df1.index
         result.columns = df1.columns
         return result
+
+
+def safe_ne(df1: pd.DataFrame, df2: pd.DataFrame) -> pd.DataFrame:
+    """NA-safe element-wise inequality, returning a boolean ``DataFrame``.
+
+    Thin public alias for :func:`build_differences_mask`, which already
+    implements the ``.eq()``-style, ``pd.NA``-aware comparison. Provided so
+    that ``BasicComparator``/``AdvancedComparator`` and any new callers can
+    reach the shared NA-safe comparison under an intention-revealing name.
+    ``NA vs NA`` is treated as equal; exactly one NA on one side is a
+    difference.
+    """
+    return build_differences_mask(df1, df2)

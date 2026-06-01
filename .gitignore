@@ -48,3 +48,6 @@ logs/
 # Environment
 .env
 .env.local
+
+# PyInstaller
+*.spec

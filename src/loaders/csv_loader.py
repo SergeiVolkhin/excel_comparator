@@ -99,17 +99,8 @@ class CSVFileLoader(IFileLoader):
 
             self.logger.info(f"Загрузка CSV файла: {file_path}")
 
-            # Выбираем путь: обычный или чанкованный (для больших файлов)
             file_size = file_path.stat().st_size
-            if file_size > self._CHUNK_THRESHOLD_BYTES:
-                self.logger.info(
-                    f"Размер файла {file_size / 1024 / 1024:.1f} MB превышает порог "
-                    f"{self._CHUNK_THRESHOLD_BYTES / 1024 / 1024:.0f} MB — чтение по {chunk_size} строк"
-                )
-                chunks = pd.read_csv(file_path, chunksize=chunk_size, **load_params)
-                df = cast(pd.DataFrame, pd.concat(chunks, ignore_index=True))
-            else:
-                df = cast(pd.DataFrame, pd.read_csv(file_path, **load_params))
+            df = self._read_csv(file_path, load_params, file_size, chunk_size)
 
             self.logger.info(f"Успешно загружен CSV файл {file_path.name}: {df.shape}")
 
@@ -128,8 +119,9 @@ class CSVFileLoader(IFileLoader):
                 ""
                 if kwargs.get("on_bad_lines") in ("skip", "warn")
                 else (
-                    " Подсказка: повторите запуск с --csv-on-bad-lines skip, "
-                    "чтобы пропустить повреждённые строки."
+                    " Подсказка: включите пропуск повреждённых строк "
+                    "(CLI: --csv-on-bad-lines skip; GUI: галочка «Пропускать "
+                    "повреждённые строки»)."
                 )
             )
             raise FileLoadError(str(file_path), f"Ошибка парсинга CSV: {e}.{hint}") from e
@@ -140,6 +132,57 @@ class CSVFileLoader(IFileLoader):
     def get_supported_extensions(self) -> list[str]:
         """Возвращает список поддерживаемых расширений"""
         return self.SUPPORTED_EXTENSIONS.copy()
+
+    def _read_csv(
+        self,
+        file_path: Path,
+        load_params: dict[str, Any],
+        file_size: int,
+        chunk_size: int,
+    ) -> pd.DataFrame:
+        """Читает CSV обычным или чанкованным путём.
+
+        Если ``on_bad_lines="skip"`` (путь, который включают GUI-галочка и
+        ``--csv-on-bad-lines skip``), строковое значение заменяется на
+        callable-обработчик, который считает пропущенные строки и возвращает
+        ``None`` (строка отбрасывается). Это даёт точный счётчик пропущенных
+        строк, который затем выводится одним WARNING.
+
+        Режим ``"warn"`` НЕ перехватывается: его обрабатывает сам pandas
+        (эмитит ``ParserWarning`` на каждую строку) — это закреплено тестами.
+        По умолчанию ``on_bad_lines`` отсутствует, и pandas работает строго
+        (режим ``"error"``): повреждённый файл по-прежнему завершается ошибкой.
+        """
+        params = dict(load_params)
+        bad_lines_mode = params.get("on_bad_lines")
+        skipped = 0
+
+        if bad_lines_mode == "skip":
+
+            def _count_bad_line(bad_line: list[str]) -> None:
+                nonlocal skipped
+                skipped += 1
+                return None
+
+            params["on_bad_lines"] = _count_bad_line
+
+        if file_size > self._CHUNK_THRESHOLD_BYTES:
+            self.logger.info(
+                f"Размер файла {file_size / 1024 / 1024:.1f} MB превышает порог "
+                f"{self._CHUNK_THRESHOLD_BYTES / 1024 / 1024:.0f} MB — чтение по {chunk_size} строк"
+            )
+            chunks = pd.read_csv(file_path, chunksize=chunk_size, **params)
+            df = cast(pd.DataFrame, pd.concat(chunks, ignore_index=True))
+        else:
+            df = cast(pd.DataFrame, pd.read_csv(file_path, **params))
+
+        if bad_lines_mode == "skip" and skipped:
+            self.logger.warning(
+                f"Пропущено повреждённых строк при чтении {file_path.name}: {skipped}. "
+                f"Данные загружены частично, итоговый размер: {df.shape}"
+            )
+
+        return df
 
     def _detect_encoding(self, file_path: Path) -> str:
         """Определяет кодировку файла"""
@@ -183,11 +226,24 @@ class CSVFileLoader(IFileLoader):
             return ","
 
     @staticmethod
-    def _read_sample_lines(file_path: Path, encoding: str, max_lines: int = 5) -> list[str]:
+    def _read_sample_lines(file_path: Path, encoding: str, max_lines: int = 50) -> list[str]:
+        """Читает до ``max_lines`` первых строк без полного прохода по файлу.
+
+        Раньше функция сначала считала ВСЕ строки файла
+        (``sum(1 for _ in f)``) лишь ради ограничения среза — на больших файлах
+        это был напрасный полный проход. Теперь читаем построчно и
+        останавливаемся на EOF. Больший размер выборки (50 против прежних 5)
+        повышает надёжность определения разделителя на файлах с кавычками и
+        строками переменной длины.
+        """
+        lines: list[str] = []
         with open(file_path, encoding=encoding) as f:
-            total = sum(1 for _ in f)
-        with open(file_path, encoding=encoding) as f:
-            return [f.readline().strip() for _ in range(min(max_lines, total))]
+            for _ in range(max_lines):
+                line = f.readline()
+                if not line:
+                    break
+                lines.append(line.strip())
+        return lines
 
     @classmethod
     def _score_separators(cls, lines: list[str]) -> dict[str, tuple[float, float]]:

@@ -26,6 +26,15 @@ DEFAULT_HIGHLIGHT_COLOR: str = "FFFF00"
 #: Header row background color.
 HEADER_FILL_COLOR: str = "E6E6FA"
 
+#: Column-width auto-fit samples only the first N data rows instead of the
+#: whole sheet. Width is a visual estimate, so sampling keeps the cost roughly
+#: constant rather than O(rows × cols) on large tables.
+COLUMN_WIDTH_SAMPLE_ROWS: int = 200
+
+#: Above this row count an Excel report is slow to build; we log a warning
+#: suggesting the HTML formatter (which paginates) for large tables.
+EXCEL_LARGE_ROW_THRESHOLD: int = 20_000
+
 
 class ExcelOutputFormatter(IOutputFormatter):
     """Форматтер для вывода результатов сравнения в Excel"""
@@ -77,6 +86,14 @@ class ExcelOutputFormatter(IOutputFormatter):
         """Форматирует и сохраняет результат сравнения в Excel"""
         try:
             self.logger.info(f"Создание Excel отчета: {output_path}")
+
+            rows = result.metadata.get("shape", (0, 0))[0]
+            if rows > EXCEL_LARGE_ROW_THRESHOLD:
+                self.logger.warning(
+                    f"Большой объём данных ({rows} строк): формирование Excel-отчёта "
+                    f"может быть медленным. Для больших таблиц рассмотрите HTML-отчёт "
+                    f"(укажите расширение .html в имени выходного файла)."
+                )
 
             # Создаем рабочую книгу
             workbook = Workbook()
@@ -138,9 +155,11 @@ class ExcelOutputFormatter(IOutputFormatter):
         """Создает лист с данными и применяет форматирование"""
         worksheet = workbook.create_sheet(title=sheet_name)
 
-        # Добавляем данные
+        # Добавляем данные. openpyxl не умеет писать pd.NA (в отличие от
+        # numpy.nan), а advanced-сравнение добивает короткую таблицу через
+        # reindex(fill_value=pd.NA). Поэтому NA меняем на None — пустую ячейку.
         for row in dataframe_to_rows(data_df, index=False, header=True):
-            worksheet.append(row)
+            worksheet.append([None if pd.isna(v) else v for v in row])
 
         # Применяем стили к заголовкам
         for cell in worksheet[1]:
@@ -267,33 +286,30 @@ class ExcelOutputFormatter(IOutputFormatter):
         self._auto_adjust_columns(worksheet)
 
     def _auto_adjust_columns(self, worksheet: Any) -> None:
-        """Автоматически подбирает ширину столбцов"""
-        for column in worksheet.columns:
-            max_length = 0
-            column_letter = None
+        """Подбирает ширину столбцов по выборке первых строк.
 
-            # Находим первую нормальную ячейку в столбце, чтобы получить column_letter
-            for cell in column:
-                if not isinstance(cell, MergedCell):
-                    column_letter = cell.column_letter
-                    break
+        Раньше функция проходила по ``worksheet.columns``, материализуя КАЖДУЮ
+        ячейку листа (для листа 58k×19 — около 1.1 млн ячеек на лист) и вызывая
+        ``str()``+``len()`` для каждой; это и было основной стоимостью при
+        формировании больших отчётов. Теперь сканируем только первые
+        ``COLUMN_WIDTH_SAMPLE_ROWS`` строк (+ строка заголовков): ширина всё
+        равно лишь визуальная оценка, а стоимость становится практически
+        постоянной и не зависит от числа строк.
+        """
+        last_row = min(worksheet.max_row, COLUMN_WIDTH_SAMPLE_ROWS + 1)
+        widths: dict[str, int] = {}
 
-            # Если не удалось найти column_letter, пропускаем этот столбец
-            if column_letter is None:
-                self.logger.warning(
-                    "Не удалось определить column_letter для столбца, возможно все ячейки объединены"
-                )
-                continue
+        for row in worksheet.iter_rows(min_row=1, max_row=last_row):
+            for cell in row:
+                if isinstance(cell, MergedCell):
+                    continue
+                value = cell.value
+                if value is None:
+                    continue
+                length = len(str(value))
+                letter = cell.column_letter
+                if length > widths.get(letter, 0):
+                    widths[letter] = length
 
-            # Теперь определяем максимальную длину значения в столбце
-            for cell in column:
-                try:
-                    if cell.value and len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except (TypeError, AttributeError):
-                    # Игнорируем ошибки при обработке null-значений или объединенных ячеек
-                    pass
-
-            # Устанавливаем ширину столбца, ограничивая максимальное значение
-            adjusted_width = min(max_length + 2, 50)  # Максимум 50 символов
-            worksheet.column_dimensions[column_letter].width = adjusted_width
+        for letter, max_length in widths.items():
+            worksheet.column_dimensions[letter].width = min(max_length + 2, 50)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,29 @@ class TestPersistence:
         fresh.load_config()
         assert fresh.comparison.ignore_case is True
         assert fresh.log_level == "DEBUG"
+
+    def test_redundant_identical_save_is_skipped(
+        self, config: AppConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        config.log_level = "DEBUG"
+        config.save_config()  # first write
+        assert config.config_path.exists()
+        first_mtime = config.config_path.stat().st_mtime_ns
+
+        # An identical second save must skip the write (content dirty-guard).
+        with caplog.at_level(logging.DEBUG, logger="AppConfig"):
+            config.save_config()
+        assert any("не изменилась" in r.message for r in caplog.records)
+        assert config.config_path.stat().st_mtime_ns == first_mtime
+
+        # A real change must write again.
+        caplog.clear()
+        config.log_level = "WARNING"
+        with caplog.at_level(logging.DEBUG, logger="AppConfig"):
+            config.save_config()
+        assert any("успешно сохранена" in r.message for r in caplog.records)
+        data = json.loads(config.config_path.read_text(encoding="utf-8"))
+        assert data["log_level"] == "WARNING"
 
 
 class TestRecentFiles:

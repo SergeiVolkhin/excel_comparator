@@ -182,6 +182,14 @@ class MainWindow:
             options_frame, text="Игнорировать пробелы", variable=self.ignore_whitespace_var
         ).grid(row=1, column=1, sticky=tk.W, pady=5)
 
+        # Пропуск повреждённых строк CSV (по умолчанию выключено — строгий режим)
+        self.skip_bad_lines_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            options_frame,
+            text="Пропускать повреждённые строки",
+            variable=self.skip_bad_lines_var,
+        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
+
         # Кнопки управления
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=6, column=0, columnspan=3, pady=(20, 0))
@@ -239,7 +247,12 @@ class MainWindow:
         filename = filedialog.asksaveasfilename(
             title="Сохранить результат как",
             defaultextension=".xlsx",
-            filetypes=[("Excel файлы", "*.xlsx"), ("Все файлы", "*.*")],
+            filetypes=[
+                ("Excel файлы", "*.xlsx"),
+                ("CSV файлы", "*.csv"),
+                ("HTML файлы", "*.html"),
+                ("Все файлы", "*.*"),
+            ],
         )
         if filename:
             self.output_var.set(filename)
@@ -293,11 +306,16 @@ class MainWindow:
         """Выполняет сравнение в отдельном потоке"""
         try:
             # Подготавливаем опции
+            loader_options: dict = {}
+            if self.skip_bad_lines_var.get():
+                loader_options["on_bad_lines"] = "skip"
+
             options = {
                 "comparison_options": {
                     "ignore_case": self.ignore_case_var.get(),
                     "ignore_whitespace": self.ignore_whitespace_var.get(),
-                }
+                },
+                "loader_options": loader_options,
             }
 
             # Выполняем сравнение

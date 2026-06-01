@@ -116,6 +116,11 @@ class AppConfig(BaseModel):
         )
         app_data_dir.mkdir(parents=True, exist_ok=True)
 
+        # Memoize the last successfully written payload so save_config() can
+        # skip redundant identical writes (add_recent_file fires per file plus
+        # the on-exit save). Runtime-only; not a pydantic field.
+        object.__setattr__(self, "_last_saved_payload", None)
+
     def __setattr__(self, name: str, value: Any) -> None:
         # Allow setting the runtime-only `logger` and `config_path` like the
         # previous dataclass implementation did.
@@ -170,7 +175,13 @@ class AppConfig(BaseModel):
                 setattr(target, key, value)
 
     def save_config(self) -> None:
-        """Сохраняет конфигурацию в файл"""
+        """Сохраняет конфигурацию в файл.
+
+        Запись пропускается, если сериализованное содержимое не изменилось с
+        прошлого успешного сохранения. Это схлопывает избыточные дубли
+        (``add_recent_file`` сохраняет на каждый файл, плюс сохранение при
+        выходе из приложения), не меняя публичный контракт методов.
+        """
         try:
             self.validate()
 
@@ -186,10 +197,16 @@ class AppConfig(BaseModel):
             if isinstance(self.config_format, Enum):
                 config_data["config_format"] = self.config_format.value
 
+            payload = json.dumps(config_data, indent=2, ensure_ascii=False)
+            if payload == getattr(self, "_last_saved_payload", None):
+                self.logger.debug("Конфигурация не изменилась — запись пропущена")
+                return
+
             with open(self.config_path, "w", encoding="utf-8") as f:
                 if self.config_format == ConfigFormat.JSON:
-                    json.dump(config_data, f, indent=2, ensure_ascii=False)
+                    f.write(payload)
 
+            object.__setattr__(self, "_last_saved_payload", payload)
             self.logger.info(f"Конфигурация успешно сохранена в {self.config_path}")
 
         except Exception as e:

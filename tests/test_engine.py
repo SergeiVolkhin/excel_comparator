@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from src.core.engine import ComparisonEngine, StandardComparisonStrategy
 from src.core.exceptions import ApplicationError, UnsupportedFormatError
 from src.core.interfaces import ComparisonResult
+
+from .conftest import _write_csv
 
 
 @pytest.fixture
@@ -101,3 +105,41 @@ class TestStrategy:
         a, b = identical_xlsx_pair
         result = strategy.execute(a, b, tmp_path / "out.xlsx")
         assert isinstance(result, ComparisonResult)
+
+
+class TestLoadInfoSizeCheck:
+    def test_row_count_mismatch_logged_and_in_metadata(
+        self,
+        engine: ComparisonEngine,
+        csv_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        a = _write_csv(csv_dir / "a.csv", pd.DataFrame({"id": [1, 2, 3], "v": [4, 5, 6]}))
+        b = _write_csv(csv_dir / "b.csv", pd.DataFrame({"id": [1, 2], "v": [4, 5]}))
+        with caplog.at_level(logging.INFO, logger="ComparisonEngine"):
+            result = engine.compare_files(a, b, csv_dir / "out.xlsx", comparator_name="advanced")
+        assert any("Разное число строк" in r.message for r in caplog.records)
+        assert result.metadata["load_info"]["row_count_delta"] == 1
+
+    def test_column_count_mismatch_logged_and_in_metadata(
+        self,
+        engine: ComparisonEngine,
+        csv_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        a = _write_csv(csv_dir / "a.csv", pd.DataFrame({"id": [1, 2], "v": [4, 5], "x": [7, 8]}))
+        b = _write_csv(csv_dir / "b.csv", pd.DataFrame({"id": [1, 2], "v": [4, 5]}))
+        with caplog.at_level(logging.WARNING, logger="ComparisonEngine"):
+            result = engine.compare_files(a, b, csv_dir / "out.xlsx", comparator_name="advanced")
+        assert any("Разное число столбцов" in r.message for r in caplog.records)
+        assert result.metadata["load_info"]["column_count_mismatch"] == (3, 2)
+
+    def test_identical_shapes_have_no_load_info(
+        self,
+        engine: ComparisonEngine,
+        identical_csv_pair: tuple[Path, Path],
+        tmp_path: Path,
+    ) -> None:
+        a, b = identical_csv_pair
+        result = engine.compare_files(a, b, tmp_path / "out.xlsx", comparator_name="advanced")
+        assert "load_info" not in result.metadata

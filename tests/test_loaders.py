@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -525,3 +526,42 @@ class TestCSVLoaderOnBadLines:
         with pytest.warns(pd.errors.ParserWarning):
             df = loader.load(bad_csv, on_bad_lines="warn")
         assert df.shape == (2, 3)
+
+    def test_skip_logs_count_warning(self, bad_csv: Path, caplog: pytest.LogCaptureFixture) -> None:
+        # The skip path counts dropped rows and reports them in one WARNING,
+        # without emitting pandas' own per-line ParserWarning (which would
+        # trip filterwarnings=error). bad.csv has exactly one malformed line.
+        loader = CSVFileLoader()
+        with caplog.at_level(logging.WARNING, logger="CSVFileLoader"):
+            df = loader.load(bad_csv, on_bad_lines="skip")
+        assert df.shape == (2, 3)
+        msgs = [r.message for r in caplog.records]
+        assert any("Пропущено повреждённых строк" in m and ": 1." in m for m in msgs)
+
+
+class TestCSVReadSampleLines:
+    """ISSUE 5 — sampling reads more lines but no longer scans the whole file."""
+
+    def test_caps_at_max_lines(self, tmp_path: Path) -> None:
+        f = tmp_path / "many.csv"
+        f.write_text("\n".join(f"row{i}" for i in range(100)) + "\n", encoding="utf-8")
+        sample = CSVFileLoader._read_sample_lines(f, "utf-8")
+        assert len(sample) == 50  # default max_lines, not the full 100
+
+    def test_stops_at_eof_for_short_file(self, tmp_path: Path) -> None:
+        f = tmp_path / "short.csv"
+        f.write_text("a;b;c\n1;2;3\n4;5;6\n", encoding="utf-8")
+        sample = CSVFileLoader._read_sample_lines(f, "utf-8")
+        assert sample == ["a;b;c", "1;2;3", "4;5;6"]
+
+    def test_detects_semicolon_across_many_rows(
+        self, csv_loader: CSVFileLoader, tmp_path: Path
+    ) -> None:
+        # A semicolon-delimited file with more than the old 5-line sample;
+        # detection must still resolve to ';' after the larger sweep.
+        f = tmp_path / "semi.csv"
+        rows = ["id;name;score"] + [f"{i};name{i};{i * 10}" for i in range(1, 30)]
+        f.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        df = csv_loader.load(f)
+        assert list(df.columns) == ["id", "name", "score"]
+        assert df.shape == (29, 3)

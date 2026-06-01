@@ -129,12 +129,15 @@ class ComparisonEngine:
                 self.logger.info(f"Автоматически выбран форматтер: {formatter_name}")
 
             df1, df2 = self._load_pair(file1_path, file2_path, options)
+            load_info = self._check_loaded_pair(df1, df2)
             self._report(progress_reporter, 20, "Файлы загружены")
 
             self._validate_data(df1, df2)
             self._report(progress_reporter, 30, "Валидация выполнена")
 
             result = self._run_comparison(df1, df2, comparator_name, options)
+            if load_info:
+                result.metadata.setdefault("load_info", load_info)
             self._report(progress_reporter, 70, "Сравнение выполнено")
 
             self._run_formatter(
@@ -169,6 +172,29 @@ class ComparisonEngine:
         df1 = loader1.load(file1_path, **loader_options)
         df2 = loader2.load(file2_path, **loader_options)
         return df1, df2
+
+    def _check_loaded_pair(self, df1: "pd.DataFrame", df2: "pd.DataFrame") -> dict[str, Any]:
+        """Сверяет форму загруженных таблиц и логирует расхождения.
+
+        Не бросает исключений: только заранее предупреждает о разном числе
+        столбцов/строк. Cell-level сравнение это уже умеет переживать, но
+        «тихое» расхождение прежде было сюрпризом для пользователя. Возвращает
+        небольшой словарь, который движок дописывает в ``result.metadata``.
+        """
+        info: dict[str, Any] = {}
+
+        cols1, cols2 = df1.shape[1], df2.shape[1]
+        if cols1 != cols2:
+            self.logger.warning(f"Разное число столбцов: {cols1} vs {cols2}")
+            info["column_count_mismatch"] = (cols1, cols2)
+
+        rows1, rows2 = df1.shape[0], df2.shape[0]
+        if rows1 != rows2:
+            delta = abs(rows1 - rows2)
+            self.logger.info(f"Разное число строк: {rows1} vs {rows2} (Δ={delta})")
+            info["row_count_delta"] = delta
+
+        return info
 
     def _run_comparison(
         self,

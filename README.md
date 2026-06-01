@@ -1,284 +1,89 @@
-# 📊 Excel Comparator
+# Excel Comparator
 
-> Профессиональное модульное приложение для сравнения Excel файлов с расширяемой архитектурой
+Compares two table files — Excel or CSV — cell by cell and writes a report that shows what changed.
 
-## ✨ Особенности
+It runs as a desktop app (tkinter) or from the command line. Reports come out as `.xlsx` with the differing cells highlighted and a summary sheet, `.html` with side-by-side tables, or `.csv` with a per-row status column.
 
-- 🏗️ **Модульная архитектура** - соответствует принципам SOLID
-- 🔌 **Расширяемость** - легкое добавление новых компонентов без изменения существующего кода
-- 📊 **Множественные форматы** - Excel (`.xlsx`/`.xls`), CSV/TSV (`.csv`/`.txt`/`.tsv`) с auto-detect кодировки и разделителя
-- 🎯 **Различные алгоритмы сравнения** - точное, нечеткое, числовое, структурное
-- 🎨 **Гибкий вывод** - Excel с подсветкой, HTML отчеты, CSV с колонкой `__status__`
-- 🖥️ **Современный GUI** - интуитивный интерфейс на tkinter
-- ⚙️ **Конфигурируемость** - настройки сохраняются автоматически
-- 📝 **Детальное логирование** - полная диагностика процесса сравнения
+## Requirements
 
-## 🚀 Быстрый старт
+- Python 3.11 or newer
+- pandas, numpy, openpyxl, chardet, python-dateutil
 
-### Установка
+The exact version ranges are in [requirements.txt](requirements.txt). The GUI needs tkinter, which ships with the standard CPython installer on Windows and macOS. On Linux install it from your package manager, e.g. `apt install python3-tk`.
+
+## Installation
 
 ```bash
-# Клонирование репозитория
-git clone https://github.com/your-username/excel-comparator.git
-cd excel-comparator
-
-# Установка зависимостей
 pip install -r requirements.txt
-
-# Запуск приложения
 python main.py
 ```
 
-### Первое сравнение
+`python main.py` with no arguments opens the GUI. For the command line add `--cli`.
 
-1. **Запустите приложение**: `python main.py`
-2. **Выберите файлы**: Первый и второй файл для сравнения
-3. **Настройте опции**: Выберите тип сравнения и дополнительные параметры
-4. **Запустите сравнение**: Нажмите "Сравнить файлы"
-5. **Изучите результат**: Откройте созданный отчет
+## Usage
 
-## 📋 Системные требования
+### GUI
 
-- **Python**: **3.11 или выше** (см. `pyproject.toml`, `requires-python = ">=3.11"`)
-- **ОС**: Windows, macOS, Linux
-- **ОЗУ**: минимум 512 МБ (рекомендуется 2 ГБ для больших файлов;
-  с опцией `read_only=True` можно обрабатывать и более крупные —
-  см. раздел «Большие файлы»).
-- **Дисковое пространство**: 100 МБ
+Pick the first file, the second file, and an output name. The file pickers accept `.xlsx`, `.xls`, `.csv`, `.tsv` and `.txt`. The output extension decides the report format (`.xlsx`, `.html` or `.csv`).
 
-### Установка для разработки
+The **Опции сравнения** (comparison options) box has:
 
-```bash
-git clone https://github.com/SergeiVolkhin/excel_comparator.git
-cd excel_comparator
-python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
+- **Тип сравнения** (comparison type) — `basic` or `advanced`.
+- **Игнорировать регистр** (ignore case).
+- **Игнорировать пробелы** (ignore whitespace).
+- **Пропускать повреждённые строки** (skip malformed rows) — off by default. When on, CSV rows that pandas cannot parse are dropped and counted instead of stopping the load. Left off, a broken CSV fails with an error, which is the strict default.
 
-pip install -r requirements-dev.txt
-pre-commit install   # один раз на клон
-```
+Click **Сравнить файлы** to run. When it finishes, a dialog reports the total cell count, the number of differing cells and a similarity percentage.
 
-### Проверки качества
+`basic` and `advanced` differ in how much mismatch they tolerate:
+
+- `basic` expects both tables to have the same shape and the same column names. It compares cell to cell and errors out if the structure differs.
+- `advanced` handles different row counts and different column sets. It aligns the data and marks rows that exist on only one side.
+
+### CLI
 
 ```bash
-pytest tests/ -q --ignore=tests/test_benchmarks.py     # unit + property + snapshot
-pytest tests/ --cov=src --cov-branch                   # с покрытием (цель ≥ 85%)
-ruff check src/ tests/ && ruff format --check src/ tests/
-mypy src/                                              # strict режим через pyproject.toml
-pytest tests/test_benchmarks.py --benchmark-only       # производительность
+python main.py --cli --file1 prod.xlsx --file2 staging.xlsx --output diff.xlsx
 ```
 
-CI (GitHub Actions) прогоняет те же проверки на Python 3.11 / 3.12 / 3.13
-при каждом push и PR в `main`.
+The CLI always uses the `advanced` comparator. Flags:
 
-## 🚀 Большие файлы
+- `--file1`, `--file2`, `--output` — required together with `--cli`.
+- `--format {xlsx,html,csv}` — force the report format instead of reading it from the output extension.
+- `--ignore-case`, `--ignore-whitespace` — same as the GUI checkboxes.
+- `--csv-encoding ENC` — force an input encoding instead of autodetecting with chardet.
+- `--csv-delimiter SEP` — force the delimiter instead of autodetecting it.
+- `--csv-skip-rows N` — skip the first N rows of each CSV.
+- `--chunk-size N` — rows per chunk when a CSV is over 100 MB (default 50000).
+- `--csv-on-bad-lines {error,skip,warn}` — `error` stops on a malformed row (default), `skip` drops it silently, `warn` drops it and logs how many were dropped.
+- `--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}`.
 
-`ExcelFileLoader.load()` принимает опцию `read_only=True`, которая
-стримит `.xlsx` через `openpyxl` в потоковом режиме — подходит для
-файлов, которые не помещаются в память целиком.
-
-```python
-from pathlib import Path
-from src.loaders.excel_loader import ExcelFileLoader
-
-loader = ExcelFileLoader()
-df = loader.load(Path("huge.xlsx"), read_only=True)
-```
-
-Замеры на 10k × 5 xlsx (baseline → после оптимизации):
-
-| Операция                  | Было   | Стало  | Δ     |
-|---------------------------|-------:|-------:|------:|
-| `ExcelFileLoader.load`    | 193 мс | 164 мс | −15 % |
-| `ExcelOutputFormatter`    | 1003 мс| 681 мс | −32 % |
-| `engine.compare_files`    | 1397 мс| 1087 мс| −22 % |
-
-Re-run бенчмарков:
-
-```bash
-pytest tests/test_benchmarks.py --benchmark-only \
-    --benchmark-compare=0001_baseline --benchmark-columns=min,mean,max
-```
-
-## 📄 CSV поддержка
-
-CSV/TSV файлы (`.csv`, `.txt`, `.tsv`) — загрузчик и форматтер
-зарегистрированы по умолчанию, выбор по расширению входного и
-выходного файла. Сравнение CSV↔CSV, CSV↔Excel и Excel↔CSV работает
-из коробки.
-
-**Auto-detect**:
-- Кодировка — через `chardet` (fallback UTF-8 при confidence < 0.7),
-  BOM снимается автоматически.
-- Разделитель — оценка по первым строкам из набора `,`, `;`, `\t`,
-  `|`. Для `.tsv` короткий путь сразу возвращает табуляцию.
-
-**Chunked reading** — файлы > 100 MB читаются чанками по 50 000 строк
-(настраивается `chunk_size=`).
-
-**CLI пример**:
+A CSV run with a forced delimiter and encoding, skipping broken rows:
 
 ```bash
 python main.py --cli \
     --file1 prod.csv --file2 staging.csv --output diff.csv \
-    --csv-delimiter ';' --csv-encoding cp1251
+    --csv-delimiter ";" --csv-encoding cp1251 --csv-on-bad-lines skip
 ```
 
-**API**:
+## Output formats
 
-```python
-from pathlib import Path
-from src.core.engine import ComparisonEngine
+The format follows the output extension: `.xlsx`/`.xls` → Excel, `.html`/`.htm` → HTML, `.csv` → CSV, anything else → Excel. `--format` overrides that.
 
-engine = ComparisonEngine()  # CSV зарегистрирован по умолчанию
-result = engine.compare_files(
-    Path("a.csv"),
-    Path("b.csv"),
-    Path("diff.csv"),  # .csv → CSVOutputFormatter
-    comparator_name="basic",
-    loader_options={"sep": ";", "encoding": "cp1251"},
-    format_options={"delimiter": ";", "encoding": "utf-8-sig"},
-)
-```
+- **Excel** — two sheets holding the source data with the differing cells highlighted, plus a summary sheet with the statistics. Column widths are sized from the first 200 rows. Above 20,000 rows the formatter logs a warning suggesting an HTML report instead, because per-cell styling slows down at that size.
+- **HTML** — a summary, per-column difference counts, and the two tables side by side with differences highlighted. Tables over ~1000 rows are split into `_page_N.html` files next to the main one.
+- **CSV** — the source columns plus a trailing `__status__` column with `EQUAL`, `MODIFIED`, `ADDED` or `REMOVED`. `ADDED` rows carry the content from the second file. Encoding, delimiter and quoting are options; `diff_only` (via the API) drops the `EQUAL` rows.
 
-Выходной CSV получает колонку `__status__` со значениями
-`EQUAL` / `MODIFIED` / `ADDED` / `REMOVED`. Режим `diff_only=True`
-отбрасывает `EQUAL`-строки.
+CSV and TSV inputs autodetect their encoding (chardet, falling back to UTF-8) and their delimiter (chosen from `,`, `;`, tab and `|`). A byte-order mark is stripped automatically.
 
-## 🎯 Режимы сравнения
+## Configuration
 
-### 1. Базовое сравнение
-Точное побайтовое сравнение данных
-```python
-# Через API
-from src import ComparisonEngine
-engine = ComparisonEngine()
-result = engine.compare_files(file1, file2, output, comparator_name="basic")
-```
+On first run the app writes `config.json` to a per-user directory:
 
-### 2. Нечеткое сравнение
-Сравнение с учетом схожести текста
-```python
-# Нечеткое сравнение с порогом 80%
-result = engine.compare_files(
-    file1, file2, output,
-    comparator_name="fuzzy_80",
-    comparison_options={'similarity_threshold': 0.8}
-)
-```
+- Windows: `%APPDATA%\ExcelComparator\config.json`
+- Linux / macOS: `~/.config/excel-comparator/config.json`
 
-### 3. Числовое сравнение
-Сравнение чисел с допустимыми погрешностями
-```python
-# Числовое сравнение с допусками
-result = engine.compare_files(
-    file1, file2, output,
-    comparator_name="numeric",
-    comparison_options={
-        'absolute_tolerance': 1e-6,
-        'relative_tolerance': 1e-6
-    }
-)
-```
-
-### 4. Структурное сравнение
-Анализ структурных различий между файлами
-```python
-# Структурное сравнение
-result = engine.compare_files(file1, file2, output, comparator_name="structural")
-```
-
-## 🔧 Архитектура
-
-### Основные компоненты
-
-```
-src/
-├── core/           # Ядро системы (интерфейсы, движок, конфигурация)
-├── loaders/        # Загрузчики файлов (Excel, CSV, ...)
-├── comparators/    # Алгоритмы сравнения
-├── formatters/     # Форматтеры вывода (Excel, HTML, ...)
-├── validators/     # Валидаторы данных
-├── analyzers/      # Анализаторы различий
-└── gui/           # Графический интерфейс
-```
-
-### Принципы дизайна
-
-- **Single Responsibility**: Каждый класс имеет одну ответственность
-- **Open/Closed**: Открыт для расширения, закрыт для модификации
-- **Dependency Inversion**: Зависимость от абстракций, а не реализаций
-- **Interface Segregation**: Специализированные интерфейсы
-- **Liskov Substitution**: Все реализации взаимозаменяемы
-
-## 🔌 Расширение функциональности
-
-### Добавление нового загрузчика
-
-```python
-from src.core.interfaces import IFileLoader
-import pandas as pd
-
-class JSONFileLoader(IFileLoader):
-    def can_load(self, file_path: Path) -> bool:
-        return file_path.suffix.lower() == '.json'
-
-    def load(self, file_path: Path, **kwargs) -> pd.DataFrame:
-        import json
-        with open(file_path) as f:
-            data = json.load(f)
-        return pd.DataFrame(data)
-
-    def get_supported_extensions(self) -> List[str]:
-        return ['.json']
-
-# Регистрация в движке
-engine.register_file_loader(JSONFileLoader())
-```
-
-### Добавление нового компаратора
-
-```python
-from src.core.interfaces import IComparator, ComparisonResult
-
-class CustomComparator(IComparator):
-    def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options) -> ComparisonResult:
-        # Ваш алгоритм сравнения
-        differences_mask = # ваша логика
-        metadata = # ваши метаданные
-
-        return ComparisonResult(differences_mask, df1, df2, metadata)
-
-    def get_name(self) -> str:
-        return "Мой компаратор"
-
-# Регистрация в движке
-engine.register_comparator("custom", CustomComparator())
-```
-
-### Добавление нового форматтера
-
-```python
-from src.core.interfaces import IOutputFormatter
-
-class PDFFormatter(IOutputFormatter):
-    def format(self, result: ComparisonResult, output_path: Path, **options) -> None:
-        # Генерация PDF отчета
-        pass
-
-    def get_supported_formats(self) -> List[str]:
-        return ['.pdf']
-
-# Регистрация в движке
-engine.register_formatter("pdf", PDFFormatter())
-```
-
-## ⚙️ Конфигурация
-
-Приложение автоматически создает файл `config.json` с настройками:
+It holds the comparison defaults, the GUI window size and font, the log level and the recent-files list. Saving is automatic; an identical save is skipped, so the file is not rewritten on every action.
 
 ```json
 {
@@ -304,165 +109,39 @@ engine.register_formatter("pdf", PDFFormatter())
 }
 ```
 
-## 📊 Форматы вывода
+Runtime logs are written to `logs/app.log` under the working directory.
 
-### Excel отчет
-- 📋 Два листа с исходными данными
-- 🎨 Подсветка различающихся ячеек
-- 📈 Лист со статистикой и сводкой
-- 📝 Столбец с описанием различий
+## Development
 
-### HTML отчет
-- 🌐 Интерактивный веб-интерфейс
-- 📊 Графики и диаграммы статистики
-- 🎨 Современный дизайн
-- 📱 Адаптивная верстка
-
-### CSV отчет
-- 📋 Исходные колонки + трейлинг `__status__`
-  (`EQUAL` / `MODIFIED` / `ADDED` / `REMOVED`)
-- ⚙️ Кодировка, разделитель, quoting и lineterminator — опциональны
-- 🎯 `diff_only=True` — только строки с различиями
-
-## 🧪 Тестирование
+Create a virtual environment and install the dev dependencies:
 
 ```bash
-# Установка зависимостей для тестирования
-pip install pytest pytest-cov
-
-# Запуск тестов
-pytest tests/ -v
-
-# Запуск с покрытием кода
-pytest tests/ --cov=src --cov-report=html
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux / macOS
+pip install -r requirements-dev.txt
 ```
 
-## 📝 Логирование
+The checks that gate a commit:
 
-Приложение ведет подробные логи в файл `excel_comparator.log`:
-
-```python
-import logging
-
-# Настройка уровня логирования
-logging.getLogger('src').setLevel(logging.DEBUG)
-
-# Просмотр логов в реальном времени
-tail -f excel_comparator.log
+```bash
+python -m pytest tests/ -q --ignore=tests/test_benchmarks.py   # unit + property + snapshot tests
+python -m pytest tests/ --cov=src --cov-branch                 # branch coverage, held at >=85%
+python -m ruff check src/ tests/
+python -m ruff format --check src/ tests/
+python -m mypy src/                                            # strict
+python -m pytest tests/test_benchmarks.py --benchmark-only     # performance
 ```
 
-## 🚀 Использование через API
+`ComparisonEngine` (`src/core/engine.py`) wires together the replaceable parts: file loaders (`src/loaders`), comparators (`src/comparators`), output formatters (`src/formatters`) and validators (`src/validators`). Adding an input format or a comparison strategy means writing one class against the matching interface and registering it on the engine.
 
-```python
-from pathlib import Path
-from src import ComparisonEngine, AppConfig
+### Standalone binary
 
-# Создание движка
-config = AppConfig()
-engine = ComparisonEngine(config)
+Build a single-file Windows executable with PyInstaller:
 
-# Базовое сравнение
-result = engine.compare_files(
-    file1_path=Path("data1.xlsx"),
-    file2_path=Path("data2.xlsx"),
-    output_path=Path("comparison_result.xlsx"),
-    comparator_name="basic",
-    formatter_name="excel"
-)
-
-# Получение статистики
-print(f"Схожесть: {result.metadata['similarity_percentage']:.1f}%")
-print(f"Различий: {result.metadata['different_cells']}")
+```bash
+pip install pyinstaller
+pyinstaller --onefile --windowed --name ExcelComparator --add-data "src;src" main.py
 ```
 
-## 📚 Примеры использования
-
-### Пакетное сравнение
-
-```python
-import os
-from pathlib import Path
-
-def batch_compare(folder1: str, folder2: str, output_folder: str):
-    """Сравнение всех файлов в двух папках"""
-    engine = ComparisonEngine()
-
-    for file1 in Path(folder1).glob("*.xlsx"):
-        file2 = Path(folder2) / file1.name
-        if file2.exists():
-            output = Path(output_folder) / f"comparison_{file1.stem}.xlsx"
-
-            try:
-                result = engine.compare_files(file1, file2, output)
-                print(f"✅ {file1.name}: {result.metadata['similarity_percentage']:.1f}% схожести")
-            except Exception as e:
-                print(f"❌ {file1.name}: {e}")
-
-# Использование
-batch_compare("folder1", "folder2", "results")
-```
-
-### Настройка расширенного движка
-
-```python
-from src.comparators.advanced_comparator import FuzzyComparator
-
-def setup_extended_engine():
-    """Настройка движка с дополнительными компонентами.
-
-    Excel, CSV (.csv/.txt/.tsv) и HTML уже зарегистрированы по умолчанию.
-    """
-    engine = ComparisonEngine()
-
-    # Добавляем нечеткое сравнение
-    engine.register_comparator("fuzzy", FuzzyComparator(0.85))
-
-    return engine
-
-engine = setup_extended_engine()
-```
-
-## 🤝 Участие в разработке
-
-1. **Fork** репозитория
-2. **Создайте** ветку для новой функции (`git checkout -b feature/amazing-feature`)
-3. **Зафиксируйте** изменения (`git commit -m 'Add amazing feature'`)
-4. **Отправьте** в ветку (`git push origin feature/amazing-feature`)
-5. **Откройте** Pull Request
-
-### Стандарты кодирования
-
-- Используйте **Black** для форматирования кода
-- Добавляйте **type hints** для всех функций
-- Пишите **docstrings** для всех публичных методов
-- Покрывайте новый код **тестами**
-
-## 🐛 Сообщение об ошибках
-
-Если вы нашли ошибку, пожалуйста:
-
-1. Проверьте, что ошибка еще не сообщалась в [Issues](https://github.com/your-username/excel-comparator/issues)
-2. Создайте новый Issue с подробным описанием
-3. Приложите логи из `excel_comparator.log`
-4. Укажите версию Python и ОС
-
-## 📄 Лицензия
-
-Этот проект лицензирован под MIT License - см. файл [LICENSE](LICENSE) для подробностей.
-
-## 🙏 Благодарности
-
-- **pandas** - за мощную библиотеку обработки данных
-- **openpyxl** - за работу с Excel файлами
-- **tkinter** - за кроссплатформенный GUI
-- Всем контрибьюторам проекта
-
-## 📞 Поддержка
-
-- 📧 Email: support@excelcomparator.com
-- 💬 Discussions: [GitHub Discussions](https://github.com/your-username/excel-comparator/discussions)
-- 📖 Wiki: [Документация](https://github.com/your-username/excel-comparator/wiki)
-
----
-
-**Excel Comparator** - делает сравнение файлов простым и мощным! 🚀
+The result is `dist/ExcelComparator.exe`. On Linux / macOS change the `--add-data` separator from `;` to `:`.
