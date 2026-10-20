@@ -10,6 +10,7 @@ import pandas as pd
 from ..core.exceptions import ComparisonError
 from ..core.interfaces import ComparisonResult, IComparator
 from ._shared import build_differences_mask, preprocess_dataframe
+from .row_matching import align_unordered
 
 
 class BasicComparator(IComparator):
@@ -19,7 +20,12 @@ class BasicComparator(IComparator):
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def compare(self, df1: pd.DataFrame, df2: pd.DataFrame, **options: Any) -> ComparisonResult:
-        """Сравнивает два DataFrame и возвращает результат"""
+        """Сравнивает два DataFrame и возвращает результат.
+
+        Опция ``ignore_row_order=True`` сопоставляет строки по содержимому
+        (или по ``key_columns``), а не по позиции; проверки размера и имён
+        столбцов при этом остаются прежними.
+        """
 
         # Валидация входных данных
         self._validate_dataframes(df1, df2)
@@ -29,6 +35,9 @@ class BasicComparator(IComparator):
         ignore_whitespace = options.get("ignore_whitespace", False)
 
         self.logger.info(f"Начало сравнения DataFrames {df1.shape} vs {df2.shape}")
+
+        if options.get("ignore_row_order", False):
+            return self._compare_ignoring_row_order(df1, df2, options)
 
         # Предобработка данных
         processed_df1 = preprocess_dataframe(df1, ignore_case, ignore_whitespace)
@@ -60,6 +69,26 @@ class BasicComparator(IComparator):
             file2_data=df2.copy(),
             metadata=metadata,
         )
+
+    def _compare_ignoring_row_order(
+        self, df1: pd.DataFrame, df2: pd.DataFrame, options: dict[str, Any]
+    ) -> ComparisonResult:
+        """Сравнение без учёта порядка строк (опция ``ignore_row_order``)."""
+        alignment = align_unordered(
+            df1,
+            df2,
+            list(df1.columns),
+            key_columns=options.get("key_columns"),
+            ignore_case=options.get("ignore_case", False),
+            ignore_whitespace=options.get("ignore_whitespace", False),
+        )
+        result = alignment.to_result(options)
+        self.logger.info(
+            f"Сравнение без учёта порядка строк завершено: "
+            f"{result.metadata['different_cells']}/{result.metadata['total_cells']} различий "
+            f"({result.metadata['similarity_percentage']:.2f}% схожести)"
+        )
+        return result
 
     def get_name(self) -> str:
         """Возвращает название компаратора"""

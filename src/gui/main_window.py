@@ -1,38 +1,52 @@
 """
-Главное окно приложения с GUI
+Главное окно: два файла → «Сравнить» → итог в том же окне
 """
 
 import logging
+import os
+import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Any
 
+from ..comparators.row_matching import parse_key_columns
 from ..core.config import AppConfig
 from ..core.engine import ComparisonEngine, StandardComparisonStrategy
-from ..core.interfaces import IProgressObserver, ProgressReporter
-from .widgets import FileSelector, ProgressDialog, SettingsDialog
+from ..core.exceptions import FileLoadError
+from ..core.interfaces import ProgressReporter
+from ..core.result_summary import DEFAULT_REPORT_NAME, next_free_path, summarize
+from .theme import apply_theme, make_app_icon, paint_labels, set_title_bar_theme
+from .widgets import ElidedLabel, Expander, FileCard, ProgressRow, ResultPanel
+
+#: Как часто окно забирает события фонового сравнения, мс
+POLL_INTERVAL_MS = 50
+
+#: Ширина содержимого окна по умолчанию, пикселей
+CONTENT_MIN_WIDTH = 640
+
+#: Действия перетаскивания (значения tkinterdnd2.COPY / REFUSE_DROP)
+DROP_COPY = "copy"
+DROP_REFUSE = "refuse_drop"
 
 
-class ProgressDialogObserver(IProgressObserver):
-    """Реализация наблюдателя прогресса для GUI"""
+class _QueueObserver:
+    """Передаёт прогресс из фонового потока в очередь окна"""
 
-    def __init__(self, progress_dialog: ProgressDialog):
-        self.progress_dialog = progress_dialog
+    def __init__(self, events: "queue.Queue[tuple[str, Any]]") -> None:
+        self._events = events
 
     def on_progress(self, current: int, total: int, message: str = "") -> None:
-        """Вызывается при обновлении прогресса"""
-        self.progress_dialog.update_progress(current, total, message)
+        self._events.put(("progress", (current, total, message)))
 
     def on_error(self, error: Exception) -> None:
-        """Вызывается при возникновении ошибки"""
-        self.progress_dialog.close()
-        messagebox.showerror("Ошибка", str(error))
+        """Ошибку окно получает из потока сравнения"""
 
     def on_completion(self, message: str = "") -> None:
-        """Вызывается при завершении операции"""
-        self.progress_dialog.close()
-        messagebox.showinfo("Готово", message)
+        """Итог окно получает из потока сравнения"""
 
 
 class MainWindow:
@@ -42,418 +56,526 @@ class MainWindow:
         self.config = config
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        # Создаем движок сравнения
         self.engine = ComparisonEngine(config)
         self.strategy = StandardComparisonStrategy(self.engine)
 
-        # Создаем главное окно
         self.root = tk.Tk()
-        self.root.title("Excel Comparator - сравнение файлов")
-        self.root.geometry(f"{config.gui.window_width}x{config.gui.window_height}")
+        self.root.withdraw()
+        self.root.title("Excel Comparator")
+        self.dnd_enabled = self._enable_drag_and_drop()
+        self.theme = apply_theme(self.root)
+        self.root.iconphoto(True, make_app_icon(self.root, self.theme))
 
-        # Настраиваем стиль
-        self.style = ttk.Style()
-        self.style.theme_use("clam")
+        self._manual_report: Path | None = None
+        self._last_report: Path | None = None
+        self._last_pair: tuple[Path, Path] | None = None
+        self._file1_seen = ""
+        self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._running = False
+        self._lockable: list[ttk.Widget] = []
 
-        # Инициализируем интерфейс
-        self._setup_menu()
-        self._setup_widgets()
-        self._setup_bindings()
-
-        # Центрируем окно
-        self._center_window()
-
+        self._build()
+        self._register_drop_targets()
+        self._bind_keys()
+        self._refresh()
+        self._show_window()
         self.logger.info("Главное окно инициализировано")
 
-    def _setup_menu(self) -> None:
-        """Настраивает меню приложения"""
-        menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
-
-        # Меню "Файл"
-        file_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Файл", menu=file_menu)
-        file_menu.add_command(
-            label="Новое сравнение", command=self._new_comparison, accelerator="Ctrl+N"
-        )
-        file_menu.add_separator()
-
-        # Подменю "Недавние файлы"
-        self.recent_menu = tk.Menu(file_menu, tearoff=0)
-        file_menu.add_cascade(label="Недавние файлы", menu=self.recent_menu)
-        self._update_recent_menu()
-
-        file_menu.add_separator()
-        file_menu.add_command(label="Выход", command=self.root.quit, accelerator="Ctrl+Q")
-
-        # Меню "Настройки"
-        settings_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Настройки", menu=settings_menu)
-        settings_menu.add_command(label="Параметры сравнения...", command=self._show_settings)
-        settings_menu.add_command(label="Настройки интерфейса...", command=self._show_ui_settings)
-        settings_menu.add_command(label="Сбросить настройки", command=self._reset_settings)
-
-        # Меню "Справка"
-        help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Справка", menu=help_menu)
-        help_menu.add_command(label="О программе", command=self._show_about)
-        help_menu.add_command(label="Справка", command=self._show_help)
-
-    def _setup_widgets(self) -> None:
-        """Настраивает виджеты интерфейса"""
-        # Главный фрейм
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        # Настраиваем растягивание
+    # ------------------------------------------------------------------
+    # Построение окна
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        main = ttk.Frame(self.root, padding=(24, 20, 24, 24))
+        main.grid(row=0, column=0, sticky="nsew")
+        self._main_frame = main
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+        main.columnconfigure(0, weight=1, minsize=CONTENT_MIN_WIDTH)
 
-        # Заголовок
-        title_label = ttk.Label(
-            main_frame,
-            text="Сравнение Excel файлов",
-            font=(self.config.gui.font_family, 16, "bold"),
-        )
-        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
-
-        # Селекторы файлов
-        self.file1_selector = FileSelector(
-            main_frame,
-            "Первый файл:",
-            self.engine.get_supported_file_extensions(),
-            self.config.get_recent_files(),
-        )
-        self.file1_selector.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
-
-        self.file2_selector = FileSelector(
-            main_frame,
-            "Второй файл:",
-            self.engine.get_supported_file_extensions(),
-            self.config.get_recent_files(),
-        )
-        self.file2_selector.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
-
-        # Селектор выходного файла
-        ttk.Label(main_frame, text="Сохранить результат как:").grid(
-            row=3, column=0, sticky=tk.W, pady=(20, 5)
-        )
-
-        output_frame = ttk.Frame(main_frame)
-        output_frame.grid(row=4, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
-        output_frame.columnconfigure(0, weight=1)
-
-        self.output_var = tk.StringVar(value="Сравнение.xlsx")
-        self.output_entry = ttk.Entry(output_frame, textvariable=self.output_var)
-        self.output_entry.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=(0, 5))
-
-        ttk.Button(output_frame, text="Обзор...", command=self._select_output_file).grid(
-            row=0, column=1
-        )
-
-        # Опции сравнения
-        options_frame = ttk.LabelFrame(main_frame, text="Опции сравнения", padding="10")
-        options_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(20, 10))
-        options_frame.columnconfigure(1, weight=1)
-
-        # Тип сравнения
-        ttk.Label(options_frame, text="Тип сравнения:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 10)
-        )
-
-        self.comparator_var = tk.StringVar(value="basic")
-        comparator_combo = ttk.Combobox(
-            options_frame,
-            textvariable=self.comparator_var,
-            values=self.engine.get_available_comparators(),
-            state="readonly",
-        )
-        comparator_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
-
-        # Чекбоксы для опций
-        self.ignore_case_var = tk.BooleanVar(value=self.config.comparison.ignore_case)
-        ttk.Checkbutton(
-            options_frame, text="Игнорировать регистр", variable=self.ignore_case_var
-        ).grid(row=1, column=0, sticky=tk.W, pady=5)
-
-        self.ignore_whitespace_var = tk.BooleanVar(value=self.config.comparison.ignore_whitespace)
-        ttk.Checkbutton(
-            options_frame, text="Игнорировать пробелы", variable=self.ignore_whitespace_var
-        ).grid(row=1, column=1, sticky=tk.W, pady=5)
-
-        # Пропуск повреждённых строк CSV (по умолчанию выключено — строгий режим)
-        self.skip_bad_lines_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            options_frame,
-            text="Пропускать повреждённые строки",
-            variable=self.skip_bad_lines_var,
-        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
-
-        # Кнопки управления
-        button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=6, column=0, columnspan=3, pady=(20, 0))
+        self._build_header(main).grid(row=0, column=0, sticky="ew")
+        self._build_files(main).grid(row=1, column=0, sticky="ew", pady=(18, 0))
+        self._build_row_order(main).grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        self.more = self._build_more(main)
+        self.more.grid(row=3, column=0, sticky="ew", pady=(12, 0))
 
         self.compare_button = ttk.Button(
-            button_frame,
-            text="Сравнить файлы",
-            command=self._start_comparison,
-            style="Accent.TButton",
+            main, text="Сравнить", style="Big.Accent.TButton", command=self.start_comparison
         )
-        self.compare_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.compare_button.grid(row=4, column=0, sticky="ew", pady=(18, 0))
 
-        ttk.Button(button_frame, text="Очистить", command=self._clear_fields).pack(
-            side=tk.LEFT, padx=(0, 10)
+        self.progress = ProgressRow(main)
+        self.progress.grid(row=5, column=0, sticky="ew", pady=(14, 0))
+        self.progress.grid_remove()
+
+        self.result_panel = ResultPanel(
+            main,
+            self.theme,
+            on_open_report=self.open_report,
+            on_show_folder=self.show_report_in_folder,
         )
+        self.result_panel.grid(row=6, column=0, sticky="ew", pady=(16, 0))
+        self.result_panel.grid_remove()
 
-        ttk.Button(button_frame, text="Настройки", command=self._show_settings).pack(side=tk.LEFT)
+        # Цвета подписей — из их стилей (см. paint_label)
+        paint_labels(self.root)
 
-        # Статусная строка
-        self.status_var = tk.StringVar(value="Готов к работе")
-        status_bar = ttk.Label(
-            main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W
+    def _build_header(self, parent: ttk.Frame) -> ttk.Frame:
+        header = ttk.Frame(parent)
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="Сравнение двух таблиц", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
         )
-        status_bar.grid(row=7, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(20, 0))
+        hint = (
+            "Перетащите два файла в окно или нажмите «Выбрать…»"
+            if self.dnd_enabled
+            else "Выберите два файла Excel или CSV"
+        )
+        ttk.Label(header, text=hint, style="Muted.TLabel").grid(
+            row=1, column=0, sticky="w", pady=(2, 0)
+        )
+        ttk.Button(header, text="?", width=3, style="Toolbutton", command=self.show_help).grid(
+            row=0, column=1, rowspan=2, sticky="ne"
+        )
+        return header
 
-    def _setup_bindings(self) -> None:
-        """Настраивает горячие клавиши"""
-        self.root.bind("<Control-n>", lambda e: self._new_comparison())
-        self.root.bind("<Control-q>", lambda e: self.root.quit())
-        self.root.bind("<F1>", lambda e: self._show_help())
+    def _build_files(self, parent: ttk.Frame) -> ttk.Frame:
+        files = ttk.Frame(parent)
+        files.columnconfigure(0, weight=1, uniform="cards")
+        files.columnconfigure(2, weight=1, uniform="cards")
 
-    def _center_window(self) -> None:
-        """Центрирует окно на экране"""
+        self.file1_card = self._file_card(files, "Первый файл")
+        self.file1_card.grid(row=0, column=0, sticky="nsew")
+
+        self.swap_button = ttk.Button(
+            files, text="⇄", width=3, style="Toolbutton", command=self.swap_files
+        )
+        self.swap_button.grid(row=0, column=1, padx=8)
+        self._lockable.append(self.swap_button)
+
+        self.file2_card = self._file_card(files, "Второй файл")
+        self.file2_card.grid(row=0, column=2, sticky="nsew")
+        return files
+
+    def _file_card(self, parent: ttk.Frame, title: str) -> FileCard:
+        card = FileCard(
+            parent,
+            title,
+            on_change=self._on_files_changed,
+            initial_dir=self._initial_dir,
+            drop_hint=self.dnd_enabled,
+        )
+        self._lockable.append(card.browse_button)
+        return card
+
+    def _build_row_order(self, parent: ttk.Frame) -> ttk.Frame:
+        frame = ttk.Frame(parent)
+        self.ignore_row_order_var = tk.BooleanVar(value=self.config.comparison.ignore_row_order)
+        switch = ttk.Checkbutton(
+            frame,
+            text="Порядок строк не важен",
+            style="Switch.TCheckbutton",
+            variable=self.ignore_row_order_var,
+            command=self._refresh,
+        )
+        switch.grid(row=0, column=0, sticky="w")
+        self._lockable.append(switch)
+        self._row_order_hint = ttk.Label(frame, style="Caption.TLabel")
+        self._row_order_hint.grid(row=1, column=0, sticky="w", padx=(4, 0))
+        return frame
+
+    def _build_more(self, parent: ttk.Frame) -> Expander:
+        more = Expander(parent, "Дополнительно", on_toggle=self._fit_height)
+        body = more.body
+
+        ttk.Label(body, text="Ключевые столбцы", style="Caption.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        self.key_columns_var = tk.StringVar(value=", ".join(self.config.comparison.key_columns))
+        self.key_columns_entry = ttk.Entry(body, textvariable=self.key_columns_var)
+        self.key_columns_entry.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        ttk.Label(
+            body,
+            text="Через запятую, например: dt, idUser. Пусто — строки сравниваются целиком",
+            style="Caption.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=(2, 0))
+
+        self._build_checks(body).grid(row=3, column=0, sticky="w", pady=(10, 0))
+
+        ttk.Label(body, text="Отчёт", style="Caption.TLabel").grid(
+            row=4, column=0, sticky="w", pady=(10, 0)
+        )
+        report = ttk.Frame(body)
+        report.grid(row=5, column=0, sticky="ew", pady=(2, 0))
+        report.columnconfigure(0, weight=1)
+        self.report_label = ElidedLabel(report)
+        self.report_label.grid(row=0, column=0, sticky="ew")
+        change = ttk.Button(report, text="Изменить…", command=self.choose_report_path)
+        change.grid(row=0, column=1, padx=(8, 0))
+        self._lockable.append(change)
+        return more
+
+    def _build_checks(self, parent: ttk.Frame) -> ttk.Frame:
+        checks = ttk.Frame(parent)
+        settings = self.config.comparison
+        self.ignore_case_var = tk.BooleanVar(value=settings.ignore_case)
+        self.ignore_whitespace_var = tk.BooleanVar(value=settings.ignore_whitespace)
+        self.skip_bad_lines_var = tk.BooleanVar(value=False)
+        items = [
+            ("Игнорировать регистр", self.ignore_case_var, 0, 0),
+            ("Игнорировать пробелы по краям", self.ignore_whitespace_var, 0, 1),
+            ("Пропускать повреждённые строки CSV", self.skip_bad_lines_var, 1, 0),
+        ]
+        for text, variable, row, column in items:
+            check = ttk.Checkbutton(checks, text=text, variable=variable)
+            check.grid(row=row, column=column, sticky="w", padx=(0, 16))
+            self._lockable.append(check)
+        return checks
+
+    def _bind_keys(self) -> None:
+        self.root.bind("<Return>", self.start_comparison)
+        self.root.bind("<F1>", lambda _e: self.show_help())
+        self.root.bind("<Control-q>", lambda _e: self.root.quit())
+
+    def _show_window(self) -> None:
+        """Размер по содержимому, по центру экрана; высота подстраивается сама"""
+        self.root.update_idletasks()
+        width = self.root.winfo_reqwidth()
+        height = self.root.winfo_reqheight()
+        x = max((self.root.winfo_screenwidth() - width) // 2, 0)
+        y = max((self.root.winfo_screenheight() - height) // 3, 0)
+        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        self.root.minsize(width, 1)
+        self.root.resizable(True, False)
+        dark = self.theme.palette.name == "dark"
+        set_title_bar_theme(self.root, dark)
+        self.root.deiconify()
+        set_title_bar_theme(self.root, dark)
+
+    def _fit_height(self) -> None:
+        """Подгоняет высоту окна под содержимое, ширину оставляет как есть"""
         self.root.update_idletasks()
         width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f"{width}x{height}+{x}+{y}")
+        if width > 1:
+            self.root.geometry(f"{width}x{self.root.winfo_reqheight()}")
 
-    def _new_comparison(self) -> None:
-        """Начинает новое сравнение"""
-        self._clear_fields()
-        self.status_var.set("Готов к новому сравнению")
+    # ------------------------------------------------------------------
+    # Состояние окна
+    # ------------------------------------------------------------------
+    def _refresh(self) -> None:
+        row_order = self.ignore_row_order_var.get()
+        self._row_order_hint.configure(
+            text="Строки ищутся по содержимому, их порядок в файлах может отличаться"
+            if row_order
+            else "Строки сравниваются по номеру: первая с первой, вторая со второй"
+        )
+        keys_enabled = row_order and not self._running
+        self.key_columns_entry.state(["!disabled"] if keys_enabled else ["disabled"])
 
-    def _clear_fields(self) -> None:
-        """Очищает все поля"""
-        self.file1_selector.clear()
-        self.file2_selector.clear()
-        self.output_var.set("Сравнение.xlsx")
-        self.status_var.set("Поля очищены")
+        target = self._report_target()
+        self.report_label.set_text(
+            str(target) if target else f"Рядом с первым файлом: {DEFAULT_REPORT_NAME}"
+        )
 
-    def _select_output_file(self) -> None:
-        """Выбирает файл для сохранения результата"""
+        ready = bool(self.file1_card.path and self.file2_card.path) and not self._running
+        self.compare_button.state(["!disabled"] if ready else ["disabled"])
+
+    def _report_target(self) -> Path | None:
+        """Куда сохранить отчёт: выбранный вручную путь или свободное имя рядом с первым файлом"""
+        if self._manual_report is not None:
+            return self._manual_report
+        if not self.file1_card.path:
+            return None
+        return next_free_path(Path(self.file1_card.path).parent)
+
+    def _on_files_changed(self) -> None:
+        if self.file1_card.path != self._file1_seen:
+            # Ручной путь отчёта относится к прежней паре файлов
+            self._file1_seen = self.file1_card.path
+            self._manual_report = None
+        if not self._running:
+            self.result_panel.grid_remove()
+        self._refresh()
+        self._fit_height()
+
+    def _initial_dir(self) -> str:
+        """Папка для диалога выбора: рядом с уже выбранными или последними файлами"""
+        candidates = [self.file1_card.path, self.file2_card.path, *self.config.recent_files]
+        for candidate in candidates:
+            if candidate and Path(candidate).parent.is_dir():
+                return str(Path(candidate).parent)
+        return str(Path.home())
+
+    def _set_running(self, running: bool) -> None:
+        self._running = running
+        for widget in self._lockable:
+            widget.state(["disabled"] if running else ["!disabled"])
+        if running:
+            self.result_panel.grid_remove()
+            self.progress.begin()
+            self.progress.grid()
+            self.compare_button.configure(text="Сравнение…")
+        else:
+            self.progress.finish()
+            self.progress.grid_remove()
+            self.compare_button.configure(text="Сравнить")
+        self._refresh()
+        self._fit_height()
+
+    # ------------------------------------------------------------------
+    # Действия пользователя
+    # ------------------------------------------------------------------
+    def swap_files(self) -> None:
+        first, second = self.file1_card.path, self.file2_card.path
+        self.file1_card.set_path(second, notify=False)
+        self.file2_card.set_path(first, notify=False)
+        self._on_files_changed()
+
+    def set_report_path(self, path: str) -> None:
+        """Отчёт в заданный файл (например, из --output)"""
+        self._manual_report = Path(path)
+        self._refresh()
+
+    def choose_report_path(self) -> None:
+        target = self._report_target() or Path(self._initial_dir()) / DEFAULT_REPORT_NAME
         filename = filedialog.asksaveasfilename(
-            title="Сохранить результат как",
+            parent=self.root,
+            title="Куда сохранить отчёт",
+            initialdir=str(target.parent),
+            initialfile=target.name,
             defaultextension=".xlsx",
-            filetypes=[
-                ("Excel файлы", "*.xlsx"),
-                ("CSV файлы", "*.csv"),
-                ("HTML файлы", "*.html"),
-                ("Все файлы", "*.*"),
-            ],
+            filetypes=[("Excel", "*.xlsx"), ("HTML", "*.html"), ("CSV", "*.csv")],
         )
         if filename:
-            self.output_var.set(filename)
+            self._manual_report = Path(filename)
+            self._refresh()
 
-    def _start_comparison(self) -> None:
-        """Запускает процесс сравнения в отдельном потоке"""
-        # Валидация полей
-        file1_path = self.file1_selector.get_path()
-        file2_path = self.file2_selector.get_path()
-        output_path = self.output_var.get()
-
-        if not all([file1_path, file2_path, output_path]):
-            messagebox.showerror("Ошибка", "Заполните все поля!")
+    def start_comparison(self, _event: Any = None) -> None:
+        if self._running or not (self.file1_card.path and self.file2_card.path):
+            return
+        file1, file2 = Path(self.file1_card.path), Path(self.file2_card.path)
+        missing = next((path for path in (file1, file2) if not path.is_file()), None)
+        if missing is not None:
+            self._show_failure("Файл не найден", str(missing))
             return
 
-        if not Path(file1_path).exists():
-            messagebox.showerror("Ошибка", f"Файл не найден: {file1_path}")
-            return
+        output = self._report_target()
+        options = self._collect_options()
+        self._remember_options()
+        self._last_pair = (file1, file2)
+        self._set_running(True)
 
-        if not Path(file2_path).exists():
-            messagebox.showerror("Ошибка", f"Файл не найден: {file2_path}")
-            return
-
-        # Отключаем кнопку сравнения
-        self.compare_button.config(state="disabled")
-        self.status_var.set("Выполняется сравнение...")
-
-        # Создаем диалог прогресса
-        progress_dialog = ProgressDialog(self.root, "Сравнение файлов")
-
-        # Создаем прогресс репортер и наблюдателя
-        progress_reporter = ProgressReporter()
-        progress_observer = ProgressDialogObserver(progress_dialog)
-        progress_reporter.add_observer(progress_observer)
-
-        # Запускаем сравнение в отдельном потоке
-        thread = threading.Thread(
-            target=self._run_comparison,
-            args=(file1_path, file2_path, output_path, progress_reporter),
+        reporter = ProgressReporter()
+        reporter.add_observer(_QueueObserver(self._events))
+        threading.Thread(
+            target=self._compare_in_background,
+            args=(file1, file2, output, reporter, options),
             daemon=True,
-        )
-        thread.start()
+        ).start()
+        self.root.after(POLL_INTERVAL_MS, self._poll_events)
 
-    def _run_comparison(
-        self,
-        file1_path: str,
-        file2_path: str,
-        output_path: str,
-        progress_reporter: ProgressReporter,
-    ) -> None:
-        """Выполняет сравнение в отдельном потоке"""
+    def open_report(self) -> None:
+        path = self._last_report
+        if path is None or not path.exists():
+            self._show_failure("Отчёт не найден", "Сравните файлы ещё раз, чтобы создать отчёт.")
+            return
         try:
-            # Подготавливаем опции
-            loader_options: dict = {}
-            if self.skip_bad_lines_var.get():
-                loader_options["on_bad_lines"] = "skip"
-
-            options = {
-                "comparison_options": {
-                    "ignore_case": self.ignore_case_var.get(),
-                    "ignore_whitespace": self.ignore_whitespace_var.get(),
-                },
-                "loader_options": loader_options,
-            }
-
-            # Выполняем сравнение
-            result = self.strategy.execute(
-                Path(file1_path),
-                Path(file2_path),
-                Path(output_path),
-                progress_reporter=progress_reporter,
-                **options,
-            )
-
-            # Добавляем файлы в список недавних
-            self.config.add_recent_file(file1_path)
-            self.config.add_recent_file(file2_path)
-            self._update_recent_menu()
-
-            # Показываем статистику
-            self._show_comparison_stats(result)
-
-        except Exception as e:
-            progress_reporter.report_error(e)
-            self.logger.error(f"Ошибка сравнения: {e}")
-        finally:
-            # Включаем кнопку сравнения обратно
-            self.root.after(0, lambda: self.compare_button.config(state="normal"))
-            self.root.after(0, lambda: self.status_var.set("Готов к работе"))
-
-    def _show_comparison_stats(self, result) -> None:
-        """Показывает статистику сравнения"""
-        stats_text = (
-            f"Сравнение завершено!\n\n"
-            f"Общее количество ячеек: {result.metadata['total_cells']}\n"
-            f"Ячеек с различиями: {result.metadata['different_cells']}\n"
-            f"Процент схожести: {result.metadata['similarity_percentage']:.2f}%"
-        )
-
-        self.root.after(0, lambda: messagebox.showinfo("Результат сравнения", stats_text))
-
-    def _update_recent_menu(self) -> None:
-        """Обновляет меню недавних файлов"""
-        self.recent_menu.delete(0, tk.END)
-
-        recent_files = self.config.get_recent_files()
-        if not recent_files:
-            self.recent_menu.add_command(label="(Пусто)", state="disabled")
-        else:
-            for file_path in recent_files[:10]:  # Показываем только последние 10
-                file_name = Path(file_path).name
-                self.recent_menu.add_command(
-                    label=file_name, command=lambda f=file_path: self._load_recent_file(f)
-                )
-
-    def _load_recent_file(self, file_path: str) -> None:
-        """Загружает недавний файл"""
-        if Path(file_path).exists():
-            # Определяем, в какой селектор загружать
-            if not self.file1_selector.get_path():
-                self.file1_selector.set_path(file_path)
-            elif not self.file2_selector.get_path():
-                self.file2_selector.set_path(file_path)
+            if sys.platform == "win32":
+                os.startfile(path)  # type: ignore[attr-defined]
             else:
-                # Если оба заполнены, спрашиваем пользователя
-                choice = messagebox.askyesno(
-                    "Замена файла", "Оба файла уже выбраны. Заменить первый файл?"
-                )
-                if choice:
-                    self.file1_selector.set_path(file_path)
-                else:
-                    self.file2_selector.set_path(file_path)
+                subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path)])
+        except OSError as e:
+            self._show_failure("Не удалось открыть отчёт", str(e))
+
+    def show_report_in_folder(self) -> None:
+        path = self._last_report
+        if path is None or not path.exists():
+            self._show_failure("Отчёт не найден", "Сравните файлы ещё раз, чтобы создать отчёт.")
+            return
+        if sys.platform == "win32":
+            subprocess.Popen(f'explorer /select,"{path}"')
         else:
-            messagebox.showerror("Ошибка", f"Файл не найден: {file_path}")
+            subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path.parent)])
 
-    def _show_settings(self) -> None:
-        """Показывает диалог настроек"""
-        dialog = SettingsDialog(self.root, self.config)
-        self.root.wait_window(dialog.dialog)
-
-    def _show_ui_settings(self) -> None:
-        """Показывает настройки интерфейса"""
-        messagebox.showinfo("Информация", "Настройки интерфейса будут добавлены в следующей версии")
-
-    def _reset_settings(self) -> None:
-        """Сбрасывает настройки на значения по умолчанию"""
-        confirm = messagebox.askyesno(
-            "Сброс настроек",
-            "Вы уверены, что хотите сбросить все настройки на значения по умолчанию?",
+    def show_help(self) -> None:
+        first_step = (
+            "1. Перетащите два файла в окно или нажмите «Выбрать…» на карточках.\n"
+            if self.dnd_enabled
+            else "1. Нажмите «Выбрать…» на обеих карточках.\n"
         )
-        if confirm:
-            self.config.reset_to_defaults()
-            messagebox.showinfo("Сброс настроек", "Настройки сброшены на значения по умолчанию")
-
-    def _show_about(self) -> None:
-        """Показывает информацию о программе"""
-        about_text = (
-            "Excel Comparator v1.0\n\n"
-            "Программное обеспечение для сравнения Excel файлов\n\n"
-            "Особенности:\n"
-            "• Модульная архитектура\n"
-            "• Расширяемость через плагины\n"
-            "• Поддержка различных форматов\n"
-            "• Детальный анализ различий\n\n"
-            "© 2025 Volkhin Sergei"
+        messagebox.showinfo(
+            "Как пользоваться",
+            first_step + "2. Нажмите «Сравнить» или Enter.\n"
+            "3. Итог появится внизу окна. «Открыть отчёт» откроет файл Excel,\n"
+            "    где различия подсвечены.\n\n"
+            "«Порядок строк не важен»: строки ищутся по содержимому, их порядок\n"
+            "в файлах может отличаться. Выключите, чтобы сравнивать первую строку\n"
+            "с первой, вторую со второй.\n\n"
+            "В «Дополнительно»:\n"
+            "• Ключевые столбцы, например dt, idUser: строки сопоставляются по ним,\n"
+            "  а отличия в остальных столбцах подсвечиваются в отчёте.\n"
+            "• Игнорировать регистр и пробелы, пропускать повреждённые строки CSV.\n"
+            "• Куда сохранить отчёт. По умолчанию рядом с первым файлом; старые\n"
+            "  отчёты не перезаписываются: «Сравнение (2).xlsx», «Сравнение (3).xlsx»…",
+            parent=self.root,
         )
-        messagebox.showinfo("О программе", about_text)
 
-    def _show_help(self) -> None:
-        """Показывает справку"""
-        help_text = (
-            "Инструкция по использованию:\n\n"
-            "1. Выберите первый файл для сравнения\n"
-            "2. Выберите второй файл для сравнения\n"
-            "3. Укажите имя файла для сохранения результата\n"
-            "4. При необходимости настройте опции сравнения\n"
-            "5. Нажмите 'Сравнить файлы'\n\n"
-            "Горячие клавиши:\n"
-            "Ctrl+N - Новое сравнение\n"
-            "Ctrl+Q - Выход\n"
-            "F1 - Справка\n\n"
-            "Типы сравнения:\n"
-            "Basic\n"
-            "- Требует одинакового размера таблиц (строки и столбцы)\n"
-            "- Требует идентичных имен столбцов в обоих файлах\n"
-            "- Выдает ошибку, если структура файлов различается\n\n"
-            "Простое сравнение:\n"
-            "- Сравнивает данные ячейка к ячейке\n"
-            "- Подсвечивает различающиеся ячейки\n"
-            "- Выдает статистику различий\n\n"
-            "Advanced:\n"
-            "- Поддерживает файлы с разным количеством строк\n"
-            "- Может работать с файлами, имеющими разные наборы столбцов\n"
-            "- Автоматически выравнивает данные для корректного сравнения\n\n"
-            "Расширенная аналитика:\n"
-            "- Определяет общие столбцы и выполняет сравнение по ним\n"
-            "- Показывает, какие данные присутствуют только в одном из файлов\n"
-            "- Создает более детальную статистику о структурных различиях\n"
-        )
-        messagebox.showinfo("Справка", help_text)
+    # ------------------------------------------------------------------
+    # Сравнение
+    # ------------------------------------------------------------------
+    def _collect_options(self) -> dict[str, Any]:
+        """Опции читаются в главном потоке: tkinter-переменные нельзя трогать из фонового"""
+        ignore_row_order = self.ignore_row_order_var.get()
+        comparison: dict[str, Any] = {
+            "ignore_case": self.ignore_case_var.get(),
+            "ignore_whitespace": self.ignore_whitespace_var.get(),
+            "ignore_row_order": ignore_row_order,
+        }
+        key_columns = parse_key_columns(self.key_columns_var.get())
+        if ignore_row_order and key_columns:
+            comparison["key_columns"] = key_columns
+        loader = {"on_bad_lines": "skip"} if self.skip_bad_lines_var.get() else {}
+        return {
+            "comparator_name": "advanced",
+            "comparison_options": comparison,
+            "loader_options": loader,
+        }
 
+    def _remember_options(self) -> None:
+        settings = self.config.comparison
+        settings.ignore_case = self.ignore_case_var.get()
+        settings.ignore_whitespace = self.ignore_whitespace_var.get()
+        settings.ignore_row_order = self.ignore_row_order_var.get()
+        settings.key_columns = parse_key_columns(self.key_columns_var.get())
+
+    def _compare_in_background(
+        self,
+        file1: Path,
+        file2: Path,
+        output: Path,
+        reporter: ProgressReporter,
+        options: dict[str, Any],
+    ) -> None:
+        try:
+            result = self.strategy.execute(
+                file1, file2, output, progress_reporter=reporter, **options
+            )
+        except Exception as e:
+            self.logger.error(f"Ошибка сравнения: {e}")
+            self._events.put(("failed", e))
+            return
+        self._events.put(("done", (result, output)))
+
+    def _poll_events(self) -> None:
+        try:
+            while True:
+                kind, payload = self._events.get_nowait()
+                if kind == "progress":
+                    current, _total, message = payload
+                    self.progress.update_progress(int(current), str(message))
+                elif kind == "done":
+                    self._on_comparison_done(*payload)
+                elif kind == "failed":
+                    self._on_comparison_failed(payload)
+        except queue.Empty:
+            pass
+        if self._running:
+            self.root.after(POLL_INTERVAL_MS, self._poll_events)
+
+    def _on_comparison_done(self, result: Any, output: Path) -> None:
+        self._last_report = output
+        self._set_running(False)
+        self.result_panel.show_summary(summarize(result.metadata))
+        self._show_result_panel()
+        if self._last_pair is not None:
+            for path in self._last_pair:
+                self.config.add_recent_file(str(path))
+
+    def _on_comparison_failed(self, error: Exception) -> None:
+        self._set_running(False)
+        self._show_failure("Не удалось сравнить файлы", _friendly_error(error))
+
+    def _show_failure(self, headline: str, message: str) -> None:
+        self.result_panel.show_error(headline, message)
+        self._show_result_panel()
+
+    def _show_result_panel(self) -> None:
+        self.result_panel.grid()
+        self._fit_height()
+
+    # ------------------------------------------------------------------
+    # Перетаскивание файлов
+    # ------------------------------------------------------------------
+    def _enable_drag_and_drop(self) -> bool:
+        try:
+            from tkinterdnd2 import TkinterDnD
+
+            TkinterDnD.require(self.root)
+        except Exception as e:  # окно работает и без перетаскивания
+            self.logger.warning(f"Перетаскивание файлов недоступно: {e}")
+            return False
+        return True
+
+    def _register_drop_targets(self) -> None:
+        if not self.dnd_enabled:
+            return
+        from tkinterdnd2 import DND_FILES
+
+        for card in (self.file1_card, self.file2_card):
+            card.drop_target_register(DND_FILES)
+            card.dnd_bind("<<DropEnter>>", lambda _e, c=card: self._on_drag_over(c, True))
+            card.dnd_bind("<<DropLeave>>", lambda _e, c=card: self._on_drag_over(c, False))
+            card.dnd_bind("<<Drop>>", lambda e, c=card: self._on_drop(e, c))
+        # Сам Tk-корень не умеет принимать файлы (tkinterdnd2 расширяет только
+        # виджеты), поэтому файлы мимо карточек принимает рамка на всё окно
+        self._main_frame.drop_target_register(DND_FILES)
+        self._main_frame.dnd_bind("<<Drop>>", lambda e: self._on_drop(e, None))
+
+    def _on_drag_over(self, card: FileCard, active: bool) -> str:
+        if self._running:
+            return DROP_REFUSE
+        card.set_drop_highlight(active)
+        return DROP_COPY
+
+    def _on_drop(self, event: Any, card: FileCard | None) -> str:
+        if card is not None:
+            card.set_drop_highlight(False)
+        if self._running:
+            return DROP_REFUSE
+        paths = self._supported_files(self.root.tk.splitlist(event.data))
+        if not paths:
+            self._show_failure(
+                "Этот файл не подходит", "Нужен файл Excel или CSV: .xlsx, .xls, .csv, .tsv, .txt"
+            )
+            return DROP_COPY
+        if card is not None:
+            other = self.file2_card if card is self.file1_card else self.file1_card
+            card.set_path(paths[0], notify=False)
+            if len(paths) > 1:
+                other.set_path(paths[1], notify=False)
+        else:
+            self._place_dropped(paths)
+        self._on_files_changed()
+        return DROP_COPY
+
+    def _place_dropped(self, paths: list[str]) -> None:
+        """Два файла — в обе карточки по порядку; один — в первую пустую"""
+        if len(paths) > 1:
+            self.file1_card.set_path(paths[0], notify=False)
+            self.file2_card.set_path(paths[1], notify=False)
+        elif not self.file1_card.path:
+            self.file1_card.set_path(paths[0], notify=False)
+        else:
+            self.file2_card.set_path(paths[0], notify=False)
+
+    def _supported_files(self, raw_paths: Any) -> list[str]:
+        extensions = set(self.engine.get_supported_file_extensions())
+        return [
+            str(path)
+            for path in (Path(p) for p in raw_paths if p)
+            if path.is_file() and path.suffix.lower() in extensions
+        ]
+
+    # ------------------------------------------------------------------
     def run(self) -> None:
         """Запускает главный цикл приложения"""
         try:
@@ -464,3 +586,18 @@ class MainWindow:
             if self.config.auto_save_config:
                 self.config.save_config()
             self.logger.info("Приложение завершено")
+
+
+def _friendly_error(error: Exception) -> str:
+    """Понятное сообщение: занятый отчёт — частая причина ошибки записи"""
+    if isinstance(error, FileLoadError):
+        return str(error)
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, PermissionError):
+            return (
+                "Файл отчёта открыт в другой программе. Закройте его в Excel "
+                "и нажмите «Сравнить» ещё раз."
+            )
+        current = current.__cause__ or current.__context__
+    return str(error)

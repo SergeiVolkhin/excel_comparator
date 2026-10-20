@@ -8,8 +8,9 @@ It runs as a desktop app (tkinter) or from the command line. Reports come out as
 
 - Python 3.11 or newer
 - pandas, numpy, openpyxl, chardet, python-dateutil
+- for the GUI: sv-ttk (Windows 11 look) and tkinterdnd2 (drag and drop of files)
 
-The exact version ranges are in [requirements.txt](requirements.txt). The GUI needs tkinter, which ships with the standard CPython installer on Windows and macOS. On Linux install it from your package manager, e.g. `apt install python3-tk`.
+The exact version ranges are in [requirements.txt](requirements.txt). The GUI needs tkinter, which ships with the standard CPython installer on Windows and macOS. On Linux install it from your package manager, e.g. `apt install python3-tk`. If sv-ttk or tkinterdnd2 fails to load, the window still opens, with the stock look and without drag and drop.
 
 ## Installation
 
@@ -24,21 +25,38 @@ python main.py
 
 ### GUI
 
-Pick the first file, the second file, and an output name. The file pickers accept `.xlsx`, `.xls`, `.csv`, `.tsv` and `.txt`. The output extension decides the report format (`.xlsx`, `.html` or `.csv`).
+One window, three steps:
 
-The **Опции сравнения** (comparison options) box has:
+1. Drag two files from Explorer onto the window, or click **Выбрать…** (choose) on the "first file" and "second file" cards. `.xlsx`, `.xls`, `.csv`, `.tsv` and `.txt` are accepted. A file dropped on a card goes into that card; two files dropped on the window fill both cards in order. The **⇄** button swaps the files.
+2. Click **Сравнить** (compare) or press Enter.
+3. The verdict appears in the same window: a green "data matches" or a red "differences found" banner with the counts. **Открыть отчёт** opens the Excel report with the differences highlighted, **Показать в папке** opens its folder.
 
-- **Тип сравнения** (comparison type) — `basic` or `advanced`.
-- **Игнорировать регистр** (ignore case).
-- **Игнорировать пробелы** (ignore whitespace).
-- **Пропускать повреждённые строки** (skip malformed rows) — off by default. When on, CSV rows that pandas cannot parse are dropped and counted instead of stopping the load. Left off, a broken CSV fails with an error, which is the strict default.
+The **Порядок строк не важен** (row order does not matter) switch is on by default: rows are matched by content (see below). Turn it off to compare rows by position.
 
-Click **Сравнить файлы** to run. When it finishes, a dialog reports the total cell count, the number of differing cells and a similarity percentage.
+Rarely used settings sit in the collapsible **Дополнительно** (more) block:
 
-`basic` and `advanced` differ in how much mismatch they tolerate:
+- **Ключевые столбцы** (key columns) — comma-separated, e.g. `dt, idUser`. Enabled while the row-order switch is on.
+- **Ignore case** and **ignore leading/trailing whitespace**.
+- **Skip malformed CSV rows** — when on, CSV rows that pandas cannot parse are dropped instead of stopping the load.
+- **Отчёт** (report) — where the report goes. By default next to the first file as `Сравнение.xlsx`; an existing report is never overwritten, the next one becomes `Сравнение (2).xlsx`, `Сравнение (3).xlsx`… **Изменить…** sets another path; its extension picks the format (`.xlsx`, `.html`, `.csv`).
+
+The window uses the Windows 11 look and follows the Windows light or dark app theme. The last options and the folder of the last files are remembered between runs. F1 or the **?** button opens a short help.
+
+The window always uses the `advanced` comparator. How `basic` and `advanced` differ (both remain available from code):
 
 - `basic` expects both tables to have the same shape and the same column names. It compares cell to cell and errors out if the structure differs.
 - `advanced` handles different row counts and different column sets. It aligns the data and marks rows that exist on only one side.
+
+### Ignoring row order
+
+A normal comparison is positional: row 1 against row 1, row 2 against row 2. Two exports with the same rows in a different order then show almost every cell as different. The ignore-row-order mode (the **Порядок строк не важен** switch in the window, `--ignore-row-order` on the command line) works with `basic` and `advanced` and pairs rows by content:
+
+- **Without key columns** a row matches only an identical row. A row with a changed value counts as one row only in the first file and one only in the second.
+- **With key columns** rows are paired by key, and differences in the other columns are highlighted in the report as in a normal comparison.
+- Duplicate rows pair in order of appearance: two equal rows against one give one match and one row only in the first file.
+- `8000` equals `8000.0`; empty cells, `NaN` and `None` are equal; a date without a time equals the same date written as text (`2026-09-01`). Numbers stored as text are not compared with numbers.
+
+In the report the rows of the first file keep their order, each next to its match from the second file, and rows found only in the second file come last. The **Сводка** (summary) sheet gets a row-matching block: the verdict (match / differences found), how many rows matched, how many matched by key but differ, how many exist in only one file, whether the order differs, and per-file totals of the numeric columns. The totals use `math.fsum`, so row order does not change them. Go by the verdict line: the similarity percentage in the report is rounded to two decimals, so a single differing cell among tens of thousands still shows `100.00%`. The window does not have this problem: its banner states the verdict in words and rounds the percentage down.
 
 ### CLI
 
@@ -51,6 +69,8 @@ The CLI always uses the `advanced` comparator. Flags:
 - `--file1`, `--file2`, `--output` — required together with `--cli`.
 - `--format {xlsx,html,csv}` — force the report format instead of reading it from the output extension.
 - `--ignore-case`, `--ignore-whitespace` — same as the GUI checkboxes.
+- `--ignore-row-order` — compare without regard to row order (the "ignore row order" checkbox).
+- `--key-columns "dt,idUser"` — key columns for `--ignore-row-order`; without them rows match as a whole.
 - `--csv-encoding ENC` — force an input encoding instead of autodetecting with chardet.
 - `--csv-delimiter SEP` — force the delimiter instead of autodetecting it.
 - `--csv-skip-rows N` — skip the first N rows of each CSV.
@@ -66,11 +86,18 @@ python main.py --cli \
     --csv-delimiter ";" --csv-encoding cp1251 --csv-on-bad-lines skip
 ```
 
+Two exports of a report whose rows may come in a different order, paired by date and player:
+
+```bash
+python main.py --cli --file1 old.xlsx --file2 new.xlsx --output diff.xlsx \
+    --ignore-row-order --key-columns "dt,idUser"
+```
+
 ## Output formats
 
 The format follows the output extension: `.xlsx`/`.xls` → Excel, `.html`/`.htm` → HTML, `.csv` → CSV, anything else → Excel. `--format` overrides that.
 
-- **Excel** — two sheets holding the source data with the differing cells highlighted, plus a summary sheet with the statistics. Column widths are sized from the first 200 rows. Above 20,000 rows the formatter logs a warning suggesting an HTML report instead, because per-cell styling slows down at that size.
+- **Excel** — two sheets holding the source data with the differing cells highlighted, plus a summary sheet with the statistics (and, when ignoring row order, the row-matching block). Column widths are sized from the first 200 rows. Above 20,000 rows the formatter logs a warning suggesting an HTML report instead, because per-cell styling slows down at that size.
 - **HTML** — a summary, per-column difference counts, and the two tables side by side with differences highlighted. Tables over ~1000 rows are split into `_page_N.html` files next to the main one.
 - **CSV** — the source columns plus a trailing `__status__` column with `EQUAL`, `MODIFIED`, `ADDED` or `REMOVED`. `ADDED` rows carry the content from the second file. Encoding, delimiter and quoting are options; `diff_only` (via the API) drops the `EQUAL` rows.
 
@@ -83,13 +110,15 @@ On first run the app writes `config.json` to a per-user directory:
 - Windows: `%APPDATA%\ExcelComparator\config.json`
 - Linux / macOS: `~/.config/excel-comparator/config.json`
 
-It holds the comparison defaults, the GUI window size and font, the log level and the recent-files list. Saving is automatic; an identical save is skipped, so the file is not rewritten on every action.
+It holds the comparison defaults (the window stores the last chosen options and key columns there), the log level and the recent-files list, which the window uses to open the file dialog in the folder of the last file. Saving is automatic; an identical save is skipped, so the file is not rewritten on every action.
 
 ```json
 {
   "comparison": {
     "ignore_case": false,
     "ignore_whitespace": false,
+    "ignore_row_order": true,
+    "key_columns": [],
     "highlight_color": "FFFF00",
     "max_differences_display": 1000,
     "enable_list_analysis": true,
@@ -141,7 +170,8 @@ Build a single-file Windows executable with PyInstaller:
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name ExcelComparator --add-data "src;src" main.py
+pyinstaller --onefile --windowed --name ExcelComparator --icon assets/app.ico ^
+    --add-data "src;src" --collect-data sv_ttk --collect-all tkinterdnd2 main.py
 ```
 
-The result is `dist/ExcelComparator.exe`. On Linux / macOS change the `--add-data` separator from `;` to `:`.
+The result is `dist/ExcelComparator.exe`. `--collect-data sv_ttk` bundles the theme files and `--collect-all tkinterdnd2` the drag-and-drop library; without them the window opens with the stock look and without drag and drop. On Linux / macOS change the `--add-data` separator from `;` to `:` and the `^` line continuation to `\`.

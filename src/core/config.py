@@ -35,6 +35,11 @@ class ComparisonSettings(BaseModel):
 
     ignore_case: bool = False
     ignore_whitespace: bool = False
+    # Основной вопрос при сверке выгрузок — «одинаковые ли данные», поэтому
+    # по умолчанию строки сопоставляются по содержимому. CLI задаёт флаг явно.
+    ignore_row_order: bool = True
+    # Ключевые столбцы для ignore_row_order; GUI запоминает последний ввод
+    key_columns: list[str] = Field(default_factory=list)
     highlight_color: str = "FFFF00"
     max_differences_display: int = 1000
     enable_list_analysis: bool = True

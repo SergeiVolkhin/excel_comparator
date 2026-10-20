@@ -1,6 +1,11 @@
 # Excel Comparator - Зависимости проекта
 pandas>=1.5.0,<3.0.0
-numpy>=1.21.0,<2.0.0
+numpy>=1.21.0,<2.0.0; python_version < "3.13"
+# Для Python 3.13+ нет колёс numpy 1.x — нужна ветка 2.x (pandas 2.2+ с ней совместим)
+numpy>=2.1.0,<3.0.0; python_version >= "3.13"
 openpyxl>=3.0.10,<4.0.0
 chardet>=5.0.0,<6.0.0
 python-dateutil>=2.8.2,<3.0.0
+# Интерфейс: тема Windows 11 и перетаскивание файлов (без них окно тоже работает)
+sv-ttk>=2.6,<3
+tkinterdnd2>=0.6,<1

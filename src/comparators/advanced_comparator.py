@@ -9,7 +9,8 @@ import pandas as pd
 
 from ..core.exceptions import ComparisonError
 from ..core.interfaces import ComparisonResult, IComparator
-from ._shared import build_differences_mask, preprocess_dataframe
+from ._shared import build_differences_mask, preprocess_dataframe, split_columns
+from .row_matching import align_unordered
 
 
 class AdvancedComparator(IComparator):
@@ -36,11 +37,15 @@ class AdvancedComparator(IComparator):
             **options: Дополнительные параметры
                 - ignore_case: Игнорировать регистр строк
                 - ignore_whitespace: Игнорировать пробелы в начале и конце строк
-                - key_columns: Список столбцов-ключей. **ОГРАНИЧЕНИЕ**:
-                  при указании key_columns row-статистика считается по
-                  ключам, но фактическое cell-level сравнение по-прежнему
-                  выполняется построчно (по индексу). Полноценное выравнивание
-                  по ключам — planned feature, см. TODO_bugs.md #4.
+                - ignore_row_order: Сопоставлять строки по содержимому, а не
+                  по позиции — другой порядок строк не считается различием.
+                  Строки сопоставляются по key_columns, если они заданы,
+                  иначе по всей строке.
+                - key_columns: Список столбцов-ключей. **ОГРАНИЧЕНИЕ** (без
+                  ignore_row_order): row-статистика считается по ключам, но
+                  фактическое cell-level сравнение по-прежнему выполняется
+                  построчно (по индексу), см. TODO_bugs.md #4. С
+                  ignore_row_order выравнивание по ключам полноценное.
 
         Returns:
             ComparisonResult: Результат сравнения
@@ -51,6 +56,9 @@ class AdvancedComparator(IComparator):
         key_columns = options.get("key_columns")
 
         self.logger.info(f"Начало сравнения DataFrames {df1.shape} vs {df2.shape}")
+
+        if options.get("ignore_row_order", False):
+            return self._compare_ignoring_row_order(df1, df2, options)
 
         # Выравниваем столбцы и строки
         aligned_df1, aligned_df2, column_stats, row_stats = self.align_dataframes(
@@ -95,6 +103,38 @@ class AdvancedComparator(IComparator):
             metadata=metadata,
         )
 
+    def _compare_ignoring_row_order(
+        self, df1: pd.DataFrame, df2: pd.DataFrame, options: dict[str, Any]
+    ) -> ComparisonResult:
+        """Сравнение без учёта порядка строк (опция ``ignore_row_order``)."""
+        column_stats = split_columns(df1, df2)
+        alignment = align_unordered(
+            df1,
+            df2,
+            column_stats["common"],
+            key_columns=options.get("key_columns"),
+            ignore_case=options.get("ignore_case", False),
+            ignore_whitespace=options.get("ignore_whitespace", False),
+        )
+
+        row_match = alignment.row_match
+        row_stats = {
+            "df1_rows": len(df1),
+            "df2_rows": len(df2),
+            "only_in_df1": row_match["only_in_file1"],
+            "only_in_df2": row_match["only_in_file2"],
+            "common": row_match["matched"],
+        }
+        result = alignment.to_result(options, column_stats=column_stats, row_stats=row_stats)
+
+        self.logger.info(
+            f"Сравнение без учёта порядка строк завершено: совпало {row_match['matched']}, "
+            f"только в первом {row_match['only_in_file1']}, "
+            f"только во втором {row_match['only_in_file2']} "
+            f"({result.metadata['similarity_percentage']:.2f}% схожести)"
+        )
+        return result
+
     def get_name(self) -> str:
         """Возвращает название компаратора"""
         return "Улучшенное сравнение"
@@ -122,13 +162,6 @@ class AdvancedComparator(IComparator):
         """
         self.logger.info("Выравнивание DataFrames для сравнения")
 
-        # Статистика по столбцам и строкам
-        column_stats: dict[str, list[str]] = {
-            "only_in_df1": [],
-            "only_in_df2": [],
-            "common": [],
-        }
-
         row_stats = {
             "df1_rows": len(df1),
             "df2_rows": len(df2),
@@ -137,18 +170,9 @@ class AdvancedComparator(IComparator):
             "common": 0,
         }
 
-        # Выравнивание столбцов
-        df1_columns = set(df1.columns)
-        df2_columns = set(df2.columns)
-
-        column_stats["only_in_df1"] = list(df1_columns - df2_columns)
-        column_stats["only_in_df2"] = list(df2_columns - df1_columns)
-        # Сохраняем порядок столбцов из первого DataFrame
-        column_stats["common"] = [col for col in df1.columns if col in df2_columns]
-
-        # Если нет общих столбцов, выбрасываем исключение
-        if not column_stats["common"]:
-            raise ComparisonError("Нет общих столбцов для сравнения")
+        # Выравнивание столбцов: общие — в порядке первого DataFrame;
+        # без общих столбцов split_columns выбрасывает ComparisonError
+        column_stats = split_columns(df1, df2)
 
         # Используем только общие столбцы для обоих DataFrame
         common_columns = column_stats["common"]

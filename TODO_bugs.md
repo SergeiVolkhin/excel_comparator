@@ -53,3 +53,6 @@ into refactor work.
     `tests/test_advanced_comparator.py::TestKeyColumns::test_valid_key_columns_logs_warning`.
 - Follow-up: implementing true key-based cell-level alignment is a
   separate feature, not a bug fix.
+- Update: true key-based alignment is available with
+  `ignore_row_order=True` (`src/comparators/row_matching.py`); the
+  positional path above still behaves as documented.

@@ -131,5 +131,27 @@ class TestGetDifferencesSummary:
         assert "b" in summary["column_differences"]
 
 
+class TestIgnoreRowOrder:
+    def test_shuffled_rows_match(self, comp: BasicComparator, df_base: pd.DataFrame) -> None:
+        shuffled = df_base.iloc[[2, 0, 1]].reset_index(drop=True)
+        assert comp.compare(df_base, shuffled).metadata["similarity_percentage"] < 100.0
+
+        result = comp.compare(df_base, shuffled, ignore_row_order=True)
+        assert result.metadata["similarity_percentage"] == 100.0
+        assert result.metadata["row_match"]["identical"] is True
+        assert result.metadata["row_match"]["order_changed"] is True
+
+    def test_shape_validation_still_applies(self, comp: BasicComparator) -> None:
+        df1 = pd.DataFrame({"a": [1, 2]})
+        df2 = pd.DataFrame({"a": [2, 1, 3]})
+        with pytest.raises(ComparisonError, match="Размеры"):
+            comp.compare(df1, df2, ignore_row_order=True)
+
+    def test_without_option_no_row_match(
+        self, comp: BasicComparator, df_base: pd.DataFrame
+    ) -> None:
+        assert "row_match" not in comp.compare(df_base, df_base.copy()).metadata
+
+
 def test_get_name(comp: BasicComparator) -> None:
     assert comp.get_name() == "Базовое сравнение"

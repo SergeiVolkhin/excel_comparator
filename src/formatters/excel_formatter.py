@@ -250,6 +250,11 @@ class ExcelOutputFormatter(IOutputFormatter):
             worksheet[f"A{row}"].font = Font(bold=True)
             row += 1
 
+        # Сопоставление строк — только для сравнения без учёта порядка
+        row_match = result.metadata.get("row_match")
+        if row_match:
+            row = self._add_row_match_section(worksheet, row + 2, row_match)
+
         # Различия по столбцам
         row += 2
         worksheet[f"A{row}"] = "Различия по столбцам:"
@@ -284,6 +289,60 @@ class ExcelOutputFormatter(IOutputFormatter):
 
         # Автоподбор ширины столбцов
         self._auto_adjust_columns(worksheet)
+
+    def _add_row_match_section(self, worksheet: Any, row: int, row_match: dict[str, Any]) -> int:
+        """Пишет блок сопоставления строк (режим без учёта порядка строк).
+
+        Возвращает номер строки сразу после блока.
+        """
+        worksheet[f"A{row}"] = "Сопоставление строк (без учёта порядка):"
+        worksheet[f"A{row}"].font = Font(bold=True, size=14)
+        row += 1
+
+        key_columns = row_match.get("key_columns") or []
+        lines = [
+            ("Итог:", "Совпадают" if row_match["identical"] else "Есть расхождения"),
+            ("Ключевые столбцы:", ", ".join(key_columns) if key_columns else "вся строка"),
+            ("Строк в файле 1:", row_match["rows_file1"]),
+            ("Строк в файле 2:", row_match["rows_file2"]),
+            ("Совпало строк:", row_match["equal"]),
+            ("Совпало по ключу, есть отличия:", row_match["modified"]),
+            ("Только в файле 1:", row_match["only_in_file1"]),
+            ("Только в файле 2:", row_match["only_in_file2"]),
+            ("Порядок строк отличается:", "да" if row_match["order_changed"] else "нет"),
+        ]
+        for label, value in lines:
+            worksheet[f"A{row}"] = label
+            worksheet[f"B{row}"] = value
+            worksheet[f"A{row}"].font = Font(bold=True)
+            row += 1
+
+        totals = row_match.get("column_totals") or {}
+        if totals:
+            row = self._add_column_totals_table(worksheet, row + 1, totals)
+
+        return row
+
+    def _add_column_totals_table(
+        self, worksheet: Any, row: int, totals: dict[str, dict[str, float | int]]
+    ) -> int:
+        """Таблица итогов по числовым столбцам; возвращает строку после таблицы."""
+        headers = ["Столбец", "Сумма в файле 1", "Сумма в файле 2", "Разница"]
+        for col, header in zip(["A", "B", "C", "D"], headers, strict=True):
+            worksheet[f"{col}{row}"] = header
+            worksheet[f"{col}{row}"].font = self.header_font
+            worksheet[f"{col}{row}"].fill = self.header_fill
+            worksheet[f"{col}{row}"].border = self.thin_border
+        row += 1
+
+        for column_name, sums in totals.items():
+            values = [column_name, sums["file1"], sums["file2"], sums["file2"] - sums["file1"]]
+            for col, value in zip(["A", "B", "C", "D"], values, strict=True):
+                worksheet[f"{col}{row}"] = value
+                worksheet[f"{col}{row}"].border = self.thin_border
+            row += 1
+
+        return row
 
     def _auto_adjust_columns(self, worksheet: Any) -> None:
         """Подбирает ширину столбцов по выборке первых строк.

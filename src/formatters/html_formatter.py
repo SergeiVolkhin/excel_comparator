@@ -341,6 +341,10 @@ class HTMLOutputFormatter(IOutputFormatter):
                 </div>
             """
 
+        row_match = metadata.get("row_match")
+        if row_match:
+            stats_html += self._generate_row_match_cards(row_match)
+
         stats_html += """
             </div>
         """
@@ -358,6 +362,29 @@ class HTMLOutputFormatter(IOutputFormatter):
         stats_html += "</section>"
 
         return stats_html
+
+    @staticmethod
+    def _generate_row_match_cards(row_match: dict[str, Any]) -> str:
+        """Карточки сопоставления строк (режим без учёта порядка строк)."""
+        verdict = "Совпадают" if row_match["identical"] else "Есть расхождения"
+        order = "да" if row_match["order_changed"] else "нет"
+        cards = [
+            (verdict, "Итог без учёта порядка строк"),
+            (row_match["equal"], "Совпало строк"),
+            (row_match["modified"], "Совпало по ключу, есть отличия"),
+            (row_match["only_in_file1"], "Только в первом файле"),
+            (row_match["only_in_file2"], "Только во втором файле"),
+            (order, "Порядок строк отличается"),
+        ]
+        return "".join(
+            f"""
+                <div class="stat-card">
+                    <div class="stat-value">{value}</div>
+                    <div class="stat-label">{label}</div>
+                </div>
+            """
+            for value, label in cards
+        )
 
     def _generate_column_statistics(self, differences_mask: pd.DataFrame) -> str:
         """Генерирует статистику по столбцам"""

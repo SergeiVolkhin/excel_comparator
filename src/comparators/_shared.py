@@ -8,6 +8,29 @@ from __future__ import annotations
 
 import pandas as pd
 
+from ..core.exceptions import ComparisonError
+
+
+def split_columns(df1: pd.DataFrame, df2: pd.DataFrame) -> dict[str, list[str]]:
+    """Split column names into ``only_in_df1`` / ``only_in_df2`` / ``common``.
+
+    ``common`` keeps the column order of ``df1``. Raises ``ComparisonError``
+    when the frames share no columns at all.
+    """
+    df1_columns = set(df1.columns)
+    df2_columns = set(df2.columns)
+
+    column_stats: dict[str, list[str]] = {
+        "only_in_df1": list(df1_columns - df2_columns),
+        "only_in_df2": list(df2_columns - df1_columns),
+        "common": [col for col in df1.columns if col in df2_columns],
+    }
+
+    if not column_stats["common"]:
+        raise ComparisonError("Нет общих столбцов для сравнения")
+
+    return column_stats
+
 
 def preprocess_dataframe(
     df: pd.DataFrame,

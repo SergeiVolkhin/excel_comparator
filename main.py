@@ -77,6 +77,22 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--ignore-row-order",
+        action="store_true",
+        help="Сравнивать без учёта порядка строк: строки сопоставляются по содержимому",
+    )
+
+    parser.add_argument(
+        "--key-columns",
+        type=str,
+        default=None,
+        help=(
+            "Ключевые столбцы через запятую для --ignore-row-order (например: dt,idUser). "
+            "Без них строки сопоставляются по всей строке."
+        ),
+    )
+
+    parser.add_argument(
         "--format",
         type=str,
         choices=["xlsx", "html", "csv"],
@@ -145,8 +161,9 @@ def run_gui_mode(args):
     from src.core.config import AppConfig
     from src.gui.main_window import MainWindow
 
-    # Загружаем конфигурацию
+    # Загружаем конфигурацию: окно помнит последние опции и папку с файлами
     config = AppConfig()
+    config.load_config()
 
     # Применяем параметры командной строки, если они указаны
     if args.ignore_case:
@@ -155,24 +172,61 @@ def run_gui_mode(args):
     if args.ignore_whitespace:
         config.comparison.ignore_whitespace = True
 
+    if args.ignore_row_order:
+        config.comparison.ignore_row_order = True
+
     if args.log_level:
         config.log_level = args.log_level.upper()
 
     # Запускаем GUI
     window = MainWindow(config)
 
-    # Если указаны файлы в аргументах, предварительно заполняем поля
+    # Если указаны файлы в аргументах, предварительно заполняем карточки
     if args.file1 and Path(args.file1).exists():
-        window.file1_selector.set_path(args.file1)
+        window.file1_card.set_path(args.file1)
 
     if args.file2 and Path(args.file2).exists():
-        window.file2_selector.set_path(args.file2)
+        window.file2_card.set_path(args.file2)
 
     if args.output:
-        window.output_var.set(args.output)
+        window.set_report_path(args.output)
+
+    if args.key_columns:
+        window.key_columns_var.set(args.key_columns)
 
     # Запускаем приложение
     window.run()
+
+
+def _build_loader_options(args) -> dict:
+    """Собирает опции загрузчика CSV из аргументов командной строки"""
+    loader_options: dict = {}
+    if args.csv_encoding is not None:
+        loader_options["encoding"] = args.csv_encoding
+    if args.csv_delimiter is not None:
+        loader_options["sep"] = args.csv_delimiter
+    if args.csv_skip_rows is not None:
+        loader_options["skiprows"] = args.csv_skip_rows
+    if args.chunk_size is not None:
+        loader_options["chunk_size"] = args.chunk_size
+    if args.csv_on_bad_lines is not None:
+        loader_options["on_bad_lines"] = args.csv_on_bad_lines
+    return loader_options
+
+
+def _print_row_match(row_match: dict | None) -> None:
+    """Печатает итог сопоставления строк для сравнения без учёта порядка"""
+    if not row_match:
+        return
+    verdict = "совпадают" if row_match["identical"] else "есть расхождения"
+    key_columns = ", ".join(row_match["key_columns"]) or "вся строка"
+    print(f"\nБез учёта порядка строк: {verdict}")
+    print(f"  Ключевые столбцы: {key_columns}")
+    print(f"  Совпало строк: {row_match['equal']}")
+    print(f"  Совпало по ключу, есть отличия: {row_match['modified']}")
+    print(f"  Только в первом файле: {row_match['only_in_file1']}")
+    print(f"  Только во втором файле: {row_match['only_in_file2']}")
+    print(f"  Порядок строк отличается: {'да' if row_match['order_changed'] else 'нет'}")
 
 
 def run_cli_mode(args):
@@ -182,6 +236,7 @@ def run_cli_mode(args):
     Args:
         args: Аргументы командной строки
     """
+    from src.comparators.row_matching import parse_key_columns
     from src.core.config import AppConfig
     from src.core.engine import ComparisonEngine, StandardComparisonStrategy
     from src.core.interfaces import ProgressReporter
@@ -215,6 +270,7 @@ def run_cli_mode(args):
     # Применяем параметры командной строки
     config.comparison.ignore_case = args.ignore_case
     config.comparison.ignore_whitespace = args.ignore_whitespace
+    config.comparison.ignore_row_order = args.ignore_row_order
 
     # Создаем движок сравнения
     engine = ComparisonEngine(config)
@@ -246,29 +302,23 @@ def run_cli_mode(args):
         print(f"  Результат будет сохранен в: {output_path}")
         print("")
 
-        loader_options: dict = {}
-        if args.csv_encoding is not None:
-            loader_options["encoding"] = args.csv_encoding
-        if args.csv_delimiter is not None:
-            loader_options["sep"] = args.csv_delimiter
-        if args.csv_skip_rows is not None:
-            loader_options["skiprows"] = args.csv_skip_rows
-        if args.chunk_size is not None:
-            loader_options["chunk_size"] = args.chunk_size
-        if args.csv_on_bad_lines is not None:
-            loader_options["on_bad_lines"] = args.csv_on_bad_lines
-
         # CLI --format uses user-facing extension labels; the engine's
         # formatter registry keys them differently for xlsx.
         format_map = {"xlsx": "excel", "html": "html", "csv": "csv"}
         formatter_name = format_map[args.format] if args.format else None
 
+        comparison_options: dict = {
+            "ignore_case": args.ignore_case,
+            "ignore_whitespace": args.ignore_whitespace,
+            "ignore_row_order": args.ignore_row_order,
+        }
+        key_columns = parse_key_columns(args.key_columns)
+        if args.ignore_row_order and key_columns:
+            comparison_options["key_columns"] = key_columns
+
         options = {
-            "comparison_options": {
-                "ignore_case": args.ignore_case,
-                "ignore_whitespace": args.ignore_whitespace,
-            },
-            "loader_options": loader_options,
+            "comparison_options": comparison_options,
+            "loader_options": _build_loader_options(args),
             "formatter_name": formatter_name,
             "file1_name": file1_path.name,
             "file2_name": file2_path.name,
@@ -287,6 +337,7 @@ def run_cli_mode(args):
         print(f"  Всего ячеек: {total_cells}")
         print(f"  Различающихся ячеек: {different_cells}")
         print(f"  Схожесть: {similarity:.2f}%")
+        _print_row_match(result.metadata.get("row_match"))
         print(f"\nРезультат сохранен в: {output_path}")
 
     except Exception as e:

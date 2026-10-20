@@ -12,7 +12,7 @@ from src.core.engine import ComparisonEngine, StandardComparisonStrategy
 from src.core.exceptions import ApplicationError, UnsupportedFormatError
 from src.core.interfaces import ComparisonResult
 
-from .conftest import _write_csv
+from .conftest import _write_csv, _write_xlsx
 
 
 @pytest.fixture
@@ -92,6 +92,45 @@ class TestCompareFilesE2E:
         f.write_bytes(b"\x00")
         with pytest.raises(UnsupportedFormatError):
             engine.compare_files(f, f, tmp_path / "out.xlsx")
+
+
+class TestIgnoreRowOrderE2E:
+    def test_shuffled_xlsx_pair(self, engine: ComparisonEngine, xlsx_dir: Path) -> None:
+        df = pd.DataFrame({"id": [1, 2, 3, 4], "v": [10.5, 20.0, 30.25, 40.75]})
+        a = _write_xlsx(xlsx_dir / "a.xlsx", {"Sheet1": df})
+        b = _write_xlsx(xlsx_dir / "b.xlsx", {"Sheet1": df.iloc[[3, 1, 0, 2]]})
+        out = xlsx_dir / "out.xlsx"
+
+        positional = engine.compare_files(a, b, out, comparator_name="advanced")
+        assert positional.metadata["different_cells"] > 0
+
+        result = engine.compare_files(
+            a,
+            b,
+            out,
+            comparator_name="advanced",
+            comparison_options={"ignore_row_order": True},
+        )
+        assert result.metadata["different_cells"] == 0
+        assert result.metadata["row_match"]["identical"] is True
+        assert out.exists()
+
+    def test_config_default_is_applied(
+        self, xlsx_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.core.config import AppConfig
+
+        # Redirect APPDATA / HOME so AppConfig doesn't touch user dirs.
+        monkeypatch.setenv("APPDATA", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        config = AppConfig()
+        config.comparison.ignore_row_order = True
+        engine = ComparisonEngine(config)
+        df = pd.DataFrame({"id": [1, 2]})
+        a = _write_xlsx(xlsx_dir / "a.xlsx", {"Sheet1": df})
+        b = _write_xlsx(xlsx_dir / "b.xlsx", {"Sheet1": df.iloc[[1, 0]]})
+        result = engine.compare_files(a, b, tmp_path / "out.xlsx", comparator_name="basic")
+        assert result.metadata["row_match"]["identical"] is True
 
 
 class TestStrategy:

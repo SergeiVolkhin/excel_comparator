@@ -214,6 +214,10 @@ class ComparisonEngine:
                 "ignore_whitespace",
                 getattr(self.config.comparison, "ignore_whitespace", False),
             )
+            comparison_options.setdefault(
+                "ignore_row_order",
+                getattr(self.config.comparison, "ignore_row_order", False),
+            )
         return comparator.compare(df1, df2, **comparison_options)
 
     def _run_formatter(

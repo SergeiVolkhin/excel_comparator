@@ -1,450 +1,253 @@
 """
-Виджеты для использования в GUI приложения
+Виджеты главного окна: карточка файла, раскрывающийся блок, прогресс и панель результата
 """
 
-import logging
-import threading
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
+from tkinter import font as tkfont
+
+from ..core.result_summary import ResultSummary, human_size
+from .theme import Theme, paint_label
+
+#: Типы файлов в диалоге выбора
+FILE_TYPES = [
+    ("Таблицы Excel и CSV", "*.xlsx *.xls *.csv *.tsv *.txt"),
+    ("Excel", "*.xlsx *.xls"),
+    ("CSV", "*.csv *.tsv *.txt"),
+    ("Все файлы", "*.*"),
+]
+
+ELLIPSIS = "…"
 
 
-class FileSelector(ttk.Frame):
-    """Виджет для выбора файла с поддержкой недавних файлов"""
+def elide_middle(text: str, font: tkfont.Font, max_px: int) -> str:
+    """Сокращает текст посередине под ширину: «Процедура Ser…Africa.xlsx»"""
+    if max_px <= 0 or font.measure(text) <= max_px:
+        return text
+    best = ELLIPSIS
+    low, high = 0, len(text)
+    while low <= high:
+        keep = (low + high) // 2
+        head, tail = (keep + 1) // 2, keep // 2
+        candidate = text[:head] + ELLIPSIS + (text[len(text) - tail :] if tail else "")
+        if font.measure(candidate) <= max_px:
+            best, low = candidate, keep + 1
+        else:
+            high = keep - 1
+    return best
+
+
+class ElidedLabel(ttk.Label):
+    """Надпись, которая сокращает длинный текст посередине под ширину ячейки"""
+
+    def __init__(self, parent, text: str = "", **kwargs):
+        # width=1: ширину задаёт сетка, а не длина текста — иначе длинное имя
+        # файла растягивало бы окно
+        super().__init__(parent, width=1, **kwargs)
+        self._full_text = text
+        self.bind("<Configure>", self._fit)
+        self._fit()
+
+    def set_text(self, text: str) -> None:
+        self._full_text = text
+        self._fit()
+
+    def set_style(self, style: str) -> None:
+        self.configure(style=style)
+        paint_label(self)
+        self._fit()
+
+    def _fit(self, _event=None) -> None:
+        width = self.winfo_width()
+        if width <= 1:
+            self.configure(text=self._full_text)
+            return
+        self.configure(text=elide_middle(self._full_text, self._font(), width - 4))
+
+    def _font(self) -> tkfont.Font:
+        style = str(self.cget("style")) or "TLabel"
+        name = ttk.Style(self).lookup(style, "font") or "TkDefaultFont"
+        try:
+            return tkfont.nametofont(name)
+        except tk.TclError:
+            return tkfont.Font(root=self, font=name)
+
+
+class FileCard(ttk.Frame):
+    """Карточка файла: имя, папка и размер, кнопка «Выбрать…»; принимает перетаскивание"""
 
     def __init__(
         self,
         parent,
-        label_text: str,
-        supported_extensions: list[str],
-        recent_files: list[str] | None = None,
+        title: str,
+        on_change: Callable[[], None],
+        initial_dir: Callable[[], str],
+        drop_hint: bool,
     ):
-        super().__init__(parent)
+        super().__init__(parent, style="Card.TFrame", padding=(14, 12))
+        self._path = ""
+        self._on_change = on_change
+        self._initial_dir = initial_dir
+        self._empty_text = "Перетащите файл сюда" if drop_hint else "Файл не выбран"
+        self.columnconfigure(0, weight=1)
 
-        self.supported_extensions = supported_extensions
-        self.recent_files = recent_files or []
-        self.logger = logging.getLogger(self.__class__.__name__)
+        ttk.Label(self, text=title, style="Caption.TLabel").grid(row=0, column=0, sticky="w")
+        self._name = ElidedLabel(self, style="Muted.TLabel")
+        self._name.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._meta = ElidedLabel(self, style="Caption.TLabel")
+        self._meta.grid(row=2, column=0, sticky="ew")
+        self.browse_button = ttk.Button(self, text="Выбрать…", command=self.browse)
+        self.browse_button.grid(row=3, column=0, sticky="e", pady=(12, 0))
+        self._render()
 
-        # Создаем виджеты
-        self.label = ttk.Label(self, text=label_text)
-        self.label.grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+    @property
+    def path(self) -> str:
+        return self._path
 
-        self.path_var = tk.StringVar()
-        self.path_entry = ttk.Entry(self, textvariable=self.path_var, width=50)
-        self.path_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 5))
+    def set_path(self, path: str, notify: bool = True) -> None:
+        self._path = str(Path(path)) if path else ""
+        self._render()
+        if notify:
+            self._on_change()
 
-        self.browse_button = ttk.Button(self, text="Обзор...", command=self._select_file)
-        self.browse_button.grid(row=0, column=2, padx=(0, 5))
-
-    def _select_file(self) -> None:
-        """Открывает диалог выбора файла"""
-        # Формируем список типов файлов
-        filetypes = []
-        if ".xlsx" in self.supported_extensions or ".xls" in self.supported_extensions:
-            filetypes.append(("Excel файлы", "*.xlsx *.xls"))
-
-        # Добавляем остальные поддерживаемые типы
-        for ext in self.supported_extensions:
-            if ext not in [".xlsx", ".xls"]:
-                filetypes.append((f"{ext.upper()} файлы", f"*{ext}"))
-
-        filetypes.append(("Все файлы", "*.*"))
-
-        filename = filedialog.askopenfilename(title="Выберите файл", filetypes=filetypes)
-
+    def browse(self) -> None:
+        filename = filedialog.askopenfilename(
+            parent=self,
+            title="Выберите файл",
+            initialdir=self._initial_dir(),
+            filetypes=FILE_TYPES,
+        )
         if filename:
-            self.path_var.set(filename)
+            self.set_path(filename)
 
-    def _show_recent_menu(self) -> None:
-        """Показывает меню недавних файлов"""
-        if not self.recent_files:
+    def set_drop_highlight(self, active: bool) -> None:
+        self.configure(style="Drop.Card.TFrame" if active else "Card.TFrame")
+
+    def _render(self) -> None:
+        if not self._path:
+            self._name.set_style("Muted.TLabel")
+            self._name.set_text(self._empty_text)
+            self._meta.set_text("Excel или CSV")
             return
-
-        menu = tk.Menu(self, tearoff=0)
-
-        for file_path in self.recent_files[:10]:
-            if Path(file_path).exists():
-                file_name = Path(file_path).name
-                menu.add_command(label=file_name, command=lambda f=file_path: self.set_path(f))
-
-        if menu.index(tk.END) is None:
-            menu.add_command(label="(Нет доступных файлов)", state="disabled")
-
-        # Показываем меню под кнопкой
-        try:
-            x = self.recent_button.winfo_rootx()
-            y = self.recent_button.winfo_rooty() + self.recent_button.winfo_height()
-            menu.post(x, y)
-        except Exception as e:
-            self.logger.error(f"Ошибка отображения меню: {e}")
-
-    def get_path(self) -> str:
-        """Возвращает выбранный путь"""
-        return self.path_var.get().strip()
-
-    def set_path(self, path: str) -> None:
-        """Устанавливает путь"""
-        self.path_var.set(path)
-
-    def clear(self) -> None:
-        """Очищает выбранный путь"""
-        self.path_var.set("")
-
-    def validate(self) -> bool:
-        """Проверяет корректность выбранного файла"""
-        path = self.get_path()
-        if not path:
-            return False
-
-        file_path = Path(path)
-        if not file_path.exists():
-            return False
-
-        return file_path.suffix.lower() in self.supported_extensions
+        path = Path(self._path)
+        size = human_size(path.stat().st_size) if path.is_file() else "файл не найден"
+        self._name.set_style("Strong.TLabel")
+        self._name.set_text(path.name)
+        self._meta.set_text(f"{path.parent} · {size}")
 
 
-class CenteredDialog:
-    """Базовый класс для диалогов с центрированием"""
+class Expander(ttk.Frame):
+    """Раскрывающийся блок, например «Дополнительно»"""
+
+    def __init__(self, parent, title: str, on_toggle: Callable[[], None]):
+        super().__init__(parent, style="Card.TFrame", padding=4)
+        self.columnconfigure(0, weight=1)
+        self._title = title
+        self._on_toggle = on_toggle
+        self._open = False
+        self._header = ttk.Button(self, style="Expander.Toolbutton", command=self.toggle)
+        self._header.grid(row=0, column=0, sticky="ew")
+        self.body = ttk.Frame(self, padding=(10, 4, 10, 10))
+        self.body.columnconfigure(0, weight=1)
+        self._render()
+
+    @property
+    def is_open(self) -> bool:
+        return self._open
+
+    def toggle(self) -> None:
+        self._open = not self._open
+        self._render()
+        self._on_toggle()
+
+    def _render(self) -> None:
+        self._header.configure(text=("▾   " if self._open else "▸   ") + self._title)
+        if self._open:
+            self.body.grid(row=1, column=0, sticky="ew")
+        else:
+            self.body.grid_remove()
+
+
+class ProgressRow(ttk.Frame):
+    """Полоса прогресса и строка состояния под кнопкой «Сравнить»"""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.columnconfigure(0, weight=1)
+        self._bar = ttk.Progressbar(self, mode="indeterminate", maximum=100)
+        self._bar.grid(row=0, column=0, sticky="ew")
+        self._text = ttk.Label(self, style="Caption.TLabel")
+        self._text.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+    def begin(self) -> None:
+        """Пока файлы загружаются, точного процента нет — бегущая полоса"""
+        self._bar.configure(mode="indeterminate", value=0)
+        self._bar.start(15)
+        self._text.configure(text="Загрузка файлов…")
+
+    def update_progress(self, percent: int, message: str) -> None:
+        if percent <= 0:
+            return
+        self._bar.stop()
+        self._bar.configure(mode="determinate", value=percent)
+        self._text.configure(text=f"{message.rstrip('.')} · {percent} %")
+
+    def finish(self) -> None:
+        self._bar.stop()
+
+
+class ResultPanel(ttk.Frame):
+    """Итог сравнения: цветная плашка со значком, заголовком, цифрами и кнопками"""
 
     def __init__(
         self,
         parent,
-        title: str = "Диалог",
-        size: tuple[int, int] = (400, 300),
-        resizable: tuple[bool, bool] = (False, False),
-        modal: bool = True,
+        theme: Theme,
+        on_open_report: Callable[[], None],
+        on_show_folder: Callable[[], None],
     ):
-        """
-        Инициализирует базовый диалог
-
-        Args:
-            parent: Родительское окно
-            title: Заголовок диалога
-            size: Кортеж (ширина, высота)
-            resizable: Кортеж (resize_x, resize_y)
-            modal: Делать ли диалог модальным
-        """
-        self.parent = parent
-        self.logger = logging.getLogger(self.__class__.__name__)
-
-        # Создаем диалоговое окно
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title(title)
-        self.dialog.geometry(f"{size[0]}x{size[1]}")
-        self.dialog.resizable(resizable[0], resizable[1])
-
-        # Делаем диалог модальным при необходимости
-        if modal:
-            self.dialog.transient(parent)
-            self.dialog.grab_set()
-
-        # Центрируем диалог
-        self._center_dialog()
-
-    def _center_dialog(self) -> None:
-        """Центрирует диалог относительно родительского окна"""
-        self.dialog.update_idletasks()
-
-        parent_x = self.parent.winfo_rootx()
-        parent_y = self.parent.winfo_rooty()
-        parent_width = self.parent.winfo_width()
-        parent_height = self.parent.winfo_height()
-
-        dialog_width = self.dialog.winfo_width()
-        dialog_height = self.dialog.winfo_height()
-
-        x = parent_x + (parent_width - dialog_width) // 2
-        y = parent_y + (parent_height - dialog_height) // 2
-
-        self.dialog.geometry(f"+{x}+{y}")
-
-    def show(self) -> None:
-        """Показывает диалог и блокирует до закрытия"""
-        self.parent.wait_window(self.dialog)
-
-    def close(self) -> None:
-        """Закрывает диалог"""
-        try:
-            self.dialog.grab_release()
-            self.dialog.destroy()
-        except Exception as e:
-            self.logger.error(f"Ошибка при закрытии диалога: {e}")
-
-
-class ProgressDialog(CenteredDialog):
-    """Диалог прогресса выполнения операции"""
-
-    def __init__(self, parent, title: str = "Выполнение операции"):
-        super().__init__(parent, title=title, size=(400, 150), resizable=(False, False), modal=True)
-
-        # Переменные состояния
-        self._is_closed = False
-
-        self._setup_widgets()
-
-    def _setup_widgets(self) -> None:
-        """Настраивает виджеты диалога"""
-        main_frame = ttk.Frame(self.dialog, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Метка с сообщением
-        self.message_var = tk.StringVar(value="Инициализация...")
-        message_label = ttk.Label(main_frame, textvariable=self.message_var, font=("Arial", 10))
-        message_label.pack(pady=(0, 10))
-
-        # Прогресс-бар
-        self.progress = ttk.Progressbar(main_frame, mode="determinate", length=350)
-        self.progress.pack(pady=(0, 10))
-
-        # Метка с процентами
-        self.percent_var = tk.StringVar(value="0%")
-        percent_label = ttk.Label(main_frame, textvariable=self.percent_var)
-        percent_label.pack()
-
-        # Кнопка отмены (пока скрытая)
-        self.cancel_button = ttk.Button(main_frame, text="Отмена", command=self._cancel_operation)
-        # self.cancel_button.pack(pady=(10, 0))  # Раскомментировать для добавления кнопки отмены
-
-    def update_progress(self, current: int, total: int, message: str = "") -> None:
-        """Обновляет прогресс"""
-        if self._is_closed:
-            return
-
-        def _update():
-            if self._is_closed:
-                return
-
-            percentage = (current / total) * 100 if total > 0 else 0
-
-            self.progress["value"] = percentage
-            self.percent_var.set(f"{percentage:.1f}%")
-
-            if message:
-                self.message_var.set(message)
-
-            self.dialog.update()
-
-        # Выполняем обновление в главном потоке
-        if threading.current_thread() is threading.main_thread():
-            _update()
-        else:
-            self.dialog.after(0, _update)
-
-    def close(self) -> None:
-        """Закрывает диалог"""
-        if self._is_closed:
-            return
-
-        def _close():
-            self._is_closed = True
-            # Исправляем ошибку с вызовом super().close()
-            # Вместо него используем напрямую метод родительского класса
-            CenteredDialog.close(self)
-
-        if threading.current_thread() is threading.main_thread():
-            _close()
-        else:
-            self.dialog.after(0, _close)
-
-    def _cancel_operation(self) -> None:
-        """Отменяет операцию"""
-        # Здесь можно добавить логику отмены операции
-        self.close()
-
-
-class SettingsDialog(CenteredDialog):
-    """Диалог настроек приложения"""
-
-    def __init__(self, parent, config):
-        super().__init__(
-            parent, title="Настройки", size=(500, 400), resizable=(True, True), modal=True
-        )
-        self.config = config
-
-        self._setup_widgets()
-
-    def _setup_widgets(self) -> None:
-        """Настраивает виджеты диалога"""
-        notebook = ttk.Notebook(self.dialog)
-        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        # Вкладка "Сравнение"
-        comparison_frame = ttk.Frame(notebook)
-        notebook.add(comparison_frame, text="Сравнение")
-        self._setup_comparison_tab(comparison_frame)
-
-        # Вкладка "Интерфейс"
-        ui_frame = ttk.Frame(notebook)
-        notebook.add(ui_frame, text="Интерфейс")
-        self._setup_ui_tab(ui_frame)
-
-        # Кнопки
-        button_frame = ttk.Frame(self.dialog)
-        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        ttk.Button(button_frame, text="OK", command=self._save_and_close).pack(
-            side=tk.RIGHT, padx=(5, 0)
-        )
-
-        ttk.Button(button_frame, text="Отмена", command=self.close).pack(side=tk.RIGHT)
-
-        ttk.Button(button_frame, text="Применить", command=self._apply_settings).pack(
-            side=tk.RIGHT, padx=(0, 5)
-        )
-
-    def _setup_comparison_tab(self, parent) -> None:
-        """Настраивает вкладку параметров сравнения"""
-        # Основные опции
-        options_frame = ttk.LabelFrame(parent, text="Основные опции", padding="10")
-        options_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        self.ignore_case_var = tk.BooleanVar(value=self.config.comparison.ignore_case)
-        ttk.Checkbutton(
-            options_frame, text="Игнорировать регистр символов", variable=self.ignore_case_var
-        ).pack(anchor=tk.W)
-
-        self.ignore_whitespace_var = tk.BooleanVar(value=self.config.comparison.ignore_whitespace)
-        ttk.Checkbutton(
-            options_frame,
-            text="Игнорировать пробелы в начале и конце",
-            variable=self.ignore_whitespace_var,
-        ).pack(anchor=tk.W)
-
-        self.enable_list_analysis_var = tk.BooleanVar(
-            value=self.config.comparison.enable_list_analysis
-        )
-        ttk.Checkbutton(
-            options_frame, text="Включить анализ списков", variable=self.enable_list_analysis_var
-        ).pack(anchor=tk.W)
-
-        # Настройки подсветки
-        highlight_frame = ttk.LabelFrame(parent, text="Подсветка различий", padding="10")
-        highlight_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        ttk.Label(highlight_frame, text="Цвет подсветки:").pack(anchor=tk.W)
-
-        color_frame = ttk.Frame(highlight_frame)
-        color_frame.pack(fill=tk.X, pady=5)
-
-        self.highlight_color_var = tk.StringVar(value=self.config.comparison.highlight_color)
-        color_entry = ttk.Entry(color_frame, textvariable=self.highlight_color_var, width=10)
-        color_entry.pack(side=tk.LEFT)
-
-        # Цветные кнопки для быстрого выбора
-        colors = ["FFFF00", "FFB6C1", "98FB98", "87CEEB", "DDA0DD"]
-        for color in colors:
-            btn = tk.Button(
-                color_frame,
-                bg=f"#{color}",
-                width=3,
-                height=1,
-                command=lambda c=color: self.highlight_color_var.set(c),
-            )
-            btn.pack(side=tk.LEFT, padx=2)
-
-        # Разделитель списков
-        ttk.Label(highlight_frame, text="Разделитель для анализа списков:").pack(
-            anchor=tk.W, pady=(10, 0)
-        )
-
-        self.list_separator_var = tk.StringVar(value=self.config.comparison.list_separator)
-        ttk.Entry(highlight_frame, textvariable=self.list_separator_var, width=5).pack(anchor=tk.W)
-
-    def _setup_ui_tab(self, parent) -> None:
-        """Настраивает вкладку интерфейса"""
-        # Размер окна
-        size_frame = ttk.LabelFrame(parent, text="Размер окна", padding="10")
-        size_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        size_grid = ttk.Frame(size_frame)
-        size_grid.pack()
-
-        ttk.Label(size_grid, text="Ширина:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.window_width_var = tk.IntVar(value=self.config.gui.window_width)
-        ttk.Spinbox(
-            size_grid, from_=600, to=1920, textvariable=self.window_width_var, width=10
-        ).grid(row=0, column=1, padx=(0, 20))
-
-        ttk.Label(size_grid, text="Высота:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
-        self.window_height_var = tk.IntVar(value=self.config.gui.window_height)
-        ttk.Spinbox(
-            size_grid, from_=400, to=1080, textvariable=self.window_height_var, width=10
-        ).grid(row=0, column=3)
-
-        # Шрифт
-        font_frame = ttk.LabelFrame(parent, text="Шрифт", padding="10")
-        font_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        font_grid = ttk.Frame(font_frame)
-        font_grid.pack()
-
-        ttk.Label(font_grid, text="Семейство:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.font_family_var = tk.StringVar(value=self.config.gui.font_family)
-        font_combo = ttk.Combobox(
-            font_grid,
-            textvariable=self.font_family_var,
-            values=["Arial", "Helvetica", "Times", "Courier", "Verdana"],
-            state="readonly",
-            width=15,
-        )
-        font_combo.grid(row=0, column=1, padx=(0, 20))
-
-        ttk.Label(font_grid, text="Размер:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
-        self.font_size_var = tk.IntVar(value=self.config.gui.font_size)
-        ttk.Spinbox(font_grid, from_=8, to=16, textvariable=self.font_size_var, width=5).grid(
-            row=0, column=3
-        )
-
-        # Другие настройки
-        other_frame = ttk.LabelFrame(parent, text="Прочее", padding="10")
-        other_frame.pack(fill=tk.X, padx=10, pady=10)
-
-        self.auto_save_config_var = tk.BooleanVar(value=self.config.auto_save_config)
-        ttk.Checkbutton(
-            other_frame,
-            text="Автоматически сохранять настройки",
-            variable=self.auto_save_config_var,
-        ).pack(anchor=tk.W)
-
-        recent_frame = ttk.Frame(other_frame)
-        recent_frame.pack(fill=tk.X, pady=(10, 0))
-
-        ttk.Label(recent_frame, text="Количество недавних файлов:").pack(side=tk.LEFT)
-        self.max_recent_files_var = tk.IntVar(value=self.config.max_recent_files)
-        ttk.Spinbox(
-            recent_frame, from_=5, to=20, textvariable=self.max_recent_files_var, width=5
-        ).pack(side=tk.LEFT, padx=(5, 0))
-
-    def _apply_settings(self) -> None:
-        """Применяет настройки"""
-        try:
-            # Настройки сравнения
-            self.config.comparison.ignore_case = self.ignore_case_var.get()
-            self.config.comparison.ignore_whitespace = self.ignore_whitespace_var.get()
-            self.config.comparison.enable_list_analysis = self.enable_list_analysis_var.get()
-            self.config.comparison.highlight_color = self.highlight_color_var.get()
-            self.config.comparison.list_separator = self.list_separator_var.get()
-
-            # Настройки интерфейса
-            self.config.gui.window_width = self.window_width_var.get()
-            self.config.gui.window_height = self.window_height_var.get()
-            self.config.gui.font_family = self.font_family_var.get()
-            self.config.gui.font_size = self.font_size_var.get()
-
-            # Прочие настройки
-            self.config.auto_save_config = self.auto_save_config_var.get()
-            self.config.max_recent_files = self.max_recent_files_var.get()
-
-            # Валидируем и сохраняем конфигурацию
-            self.config.validate()
-            self.config.save_config()
-
-            messagebox.showinfo("Настройки", "Настройки успешно применены")
-        except Exception as e:
-            self.logger.error(f"Ошибка при применении настроек: {e}")
-            messagebox.showerror("Ошибка", f"Не удалось применить настройки: {e}")
-
-    def _save_and_close(self) -> None:
-        """Сохраняет настройки и закрывает диалог"""
-        self._apply_settings()
-        self.close()
+        super().__init__(parent, style="Success.TFrame", padding=(16, 14))
+        self._theme = theme
+        self.columnconfigure(1, weight=1)
+
+        self._icon = ttk.Label(self, compound="center", font=("Segoe UI", 9, "bold"))
+        self._icon.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 12), pady=(1, 0))
+        self._title = ttk.Label(self)
+        self._title.grid(row=0, column=1, sticky="w")
+        self._details = ttk.Label(self, justify="left")
+        self._details.grid(row=1, column=1, sticky="ew", pady=(2, 0))
+
+        self._actions = ttk.Frame(self)
+        self._actions.grid(row=2, column=1, sticky="w", pady=(12, 0))
+        self._open = ttk.Button(self._actions, text="Открыть отчёт", command=on_open_report)
+        self._open.grid(row=0, column=0)
+        self._folder = ttk.Button(self._actions, text="Показать в папке", command=on_show_folder)
+        self._folder.grid(row=0, column=1, padx=(8, 0))
+
+        self.bind("<Configure>", self._wrap_details)
+
+    def show_summary(self, summary: ResultSummary) -> None:
+        kind = "Success" if summary.ok else "Error"
+        self._apply(kind, "✓" if summary.ok else "✕", summary.headline, summary.details)
+        self._actions.grid()
+
+    def show_error(self, headline: str, message: str) -> None:
+        self._apply("Error", "!", headline, message)
+        self._actions.grid_remove()
+
+    def _apply(self, kind: str, glyph: str, headline: str, details: str) -> None:
+        self.configure(style=f"{kind}.TFrame")
+        icon = self._theme.status_icons.get(kind)
+        self._icon.configure(style=f"{kind}Icon.TLabel", image=icon or "", text=glyph)
+        self._title.configure(style=f"{kind}Title.TLabel", text=headline)
+        self._details.configure(style=f"{kind}.TLabel", text=details)
+        for label in (self._icon, self._title, self._details):
+            paint_label(label)
+        self._actions.configure(style=f"{kind}Flat.TFrame")
+        self._open.configure(style=f"{kind}.Accent.TButton")
+        self._folder.configure(style=f"{kind}.TButton")
+
+    def _wrap_details(self, event) -> None:
+        self._details.configure(wraplength=max(event.width - 80, 200))

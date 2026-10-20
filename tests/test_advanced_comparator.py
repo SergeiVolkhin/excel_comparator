@@ -80,6 +80,37 @@ class TestKeyColumns:
         assert any("key_columns" in rec.message for rec in caplog.records)
 
 
+class TestIgnoreRowOrder:
+    def test_shuffled_rows_with_extra_row(self, comp: AdvancedComparator) -> None:
+        df1 = pd.DataFrame({"id": [1, 2, 3], "v": [10, 20, 30]})
+        df2 = pd.DataFrame({"id": [3, 4, 1, 2], "v": [30, 40, 10, 20]})
+        result = comp.compare(df1, df2, ignore_row_order=True)
+        row_stats = result.metadata["row_stats"]
+        assert row_stats["common"] == 3
+        assert row_stats["only_in_df1"] == 0
+        assert row_stats["only_in_df2"] == 1
+        assert result.metadata["row_match"]["only_in_file2"] == 1
+        assert result.metadata["shape"] == (4, 2)
+
+    def test_common_columns_only(self, comp: AdvancedComparator) -> None:
+        df1 = pd.DataFrame({"id": [1, 2], "extra": [0, 0]})
+        df2 = pd.DataFrame({"id": [2, 1]})
+        result = comp.compare(df1, df2, ignore_row_order=True)
+        assert result.metadata["column_stats"]["only_in_df1"] == ["extra"]
+        assert result.metadata["row_match"]["identical"] is True
+
+    def test_key_columns_align_without_warning(
+        self, comp: AdvancedComparator, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        df1 = pd.DataFrame({"id": [1, 2], "v": [10, 20]})
+        df2 = pd.DataFrame({"id": [2, 1], "v": [21, 10]})
+        with caplog.at_level("WARNING", logger="AdvancedComparator"):
+            result = comp.compare(df1, df2, ignore_row_order=True, key_columns=["id"])
+        assert not any("key_columns" in rec.message for rec in caplog.records)
+        assert result.metadata["row_match"]["modified"] == 1
+        assert result.differences_mask.sum().sum() == 1
+
+
 class TestSummary:
     def test_summary_includes_structural(self, comp: AdvancedComparator) -> None:
         df1 = pd.DataFrame({"a": [1, 2, 3], "extra": [0, 0, 0]})

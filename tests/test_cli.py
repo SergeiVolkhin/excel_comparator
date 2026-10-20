@@ -86,6 +86,17 @@ class TestArgumentParsing:
         assert args.chunk_size == 10000
         assert args.csv_on_bad_lines == "skip"
 
+    def test_row_order_flags(self, patch_argv: Any) -> None:
+        patch_argv(["--cli", "--file1", "a", "--file2", "b", "--output", "c.xlsx"])
+        args = cli_main.parse_arguments()
+        assert args.ignore_row_order is False
+        assert args.key_columns is None
+
+        patch_argv(["--cli", "--ignore-row-order", "--key-columns", "dt,idUser"])
+        args = cli_main.parse_arguments()
+        assert args.ignore_row_order is True
+        assert args.key_columns == "dt,idUser"
+
 
 class TestRunCLIMode:
     """End-to-end: small CSV pair → CSV report via run_cli_mode."""
@@ -101,6 +112,8 @@ class TestRunCLIMode:
             output=None,
             ignore_case=False,
             ignore_whitespace=False,
+            ignore_row_order=False,
+            key_columns=None,
             format=None,
             csv_encoding=None,
             csv_delimiter=None,
@@ -164,6 +177,30 @@ class TestRunCLIMode:
             )
         )
         assert out.exists()
+
+    def test_ignore_row_order_prints_row_match(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        df = pd.DataFrame({"id": [1, 2, 3], "name": ["A", "B", "C"]})
+        a = tmp_path / "a.csv"
+        b = tmp_path / "b.csv"
+        df.to_csv(a, index=False)
+        df.iloc[[2, 0, 1]].to_csv(b, index=False)
+        out = tmp_path / "r.xlsx"
+
+        cli_main.run_cli_mode(
+            self._make_args(
+                file1=str(a),
+                file2=str(b),
+                output=str(out),
+                ignore_row_order=True,
+                key_columns="id",
+            )
+        )
+        printed = capsys.readouterr().out
+        assert "Схожесть: 100.00%" in printed
+        assert "Без учёта порядка строк: совпадают" in printed
+        assert "Ключевые столбцы: id" in printed
 
     def test_missing_files_exit_code(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit) as exc:

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Order-independent comparison** — new `ignore_row_order` option for
+  both `BasicComparator` and `AdvancedComparator`
+  (`src/comparators/row_matching.py`). Rows are paired by content, or by
+  `key_columns` when given, instead of by position, so two exports with
+  the same rows in a different order compare as equal. Duplicates pair in
+  order of appearance; `8000` equals `8000.0`, NA flavours are equal, a
+  midnight datetime equals its ISO date string. The aligned frames keep
+  the positional contract, so the Excel / HTML / CSV formatters work
+  unchanged (unmatched rows are NA-padded like `advanced` does).
+  `metadata["row_match"]` carries matched / modified / only-in-file
+  counts, an `order_changed` flag, an `identical` verdict and exact
+  (`math.fsum`) per-column totals.
+- CLI: `--ignore-row-order` and `--key-columns "dt,idUser"`; the summary
+  printout includes the row-matching block.
+- Excel summary sheet: row-matching block with the verdict and a
+  per-column totals table. HTML report: row-matching stat cards.
+- **New one-window GUI** (`src/gui/`): two file cards → «Сравнить» → the
+  verdict in the same window. Windows 11 look via **sv-ttk**, light or dark
+  following the Windows app theme (dark title bar through DWM); drag and
+  drop of files via **tkinterdnd2** (one file onto a card, two files onto
+  the window); swap button; inline progress bar instead of a modal dialog;
+  green/red result banner with «Открыть отчёт» / «Показать в папке»;
+  rarely used options in a collapsible «Дополнительно» block. Both
+  libraries are optional at runtime: without them the window falls back to
+  the stock theme and to the «Выбрать…» buttons.
+- `src/core/result_summary.py`: plain-language verdict for the result
+  banner (`summarize`), a report name that never overwrites an earlier
+  report (`next_free_path`: `Сравнение (2).xlsx`…), `human_size`.
+- `ComparisonSettings.key_columns`; the GUI remembers the last options and
+  key columns, and `run_gui_mode` now actually loads `config.json` (it was
+  written but never read back).
+
+### Changed
+
+- GUI defaults to «Порядок строк не важен» (`ignore_row_order=True` in
+  `ComparisonSettings`); the CLI keeps its explicit flag.
+- The report goes next to the first file by default instead of
+  `Сравнение.xlsx` in the working directory.
+- The comparison runs in a worker thread that talks to the window only
+  through a queue; tkinter variables are read on the main thread.
+
+- With `ignore_row_order`, `key_columns` now drive real key-based
+  alignment (TODO_bugs.md #4). Without it the previous `advanced`
+  behaviour — key-based stats only, plus the warning — is unchanged.
+- Column splitting moved to `_shared.split_columns()`; `advanced` uses it.
+- `numpy` requirement split by environment marker: `<2.0.0` below
+  Python 3.13, `>=2.1.0,<3.0.0` on 3.13+ (numpy 1.x has no wheels there).
+- `main.run_cli_mode` builds loader options in `_build_loader_options()`
+  (complexity back under the `C901` limit).
+
+### Removed
+
+- GUI menu bar (Файл / Настройки / Справка, recent-files menu),
+  `SettingsDialog`, `ProgressDialog`, `CenteredDialog`, `FileSelector` and
+  the basic/advanced combobox: the window always uses `advanced`; help is
+  on F1 and the «?» button. `basic` stays available from code.
+
+### Fixed
+
+- **GUI ignored the comparison type.** `MainWindow._run_comparison` never
+  passed `comparator_name`, so the engine always used `advanced` whatever
+  the combobox showed. Moot now that the window always uses `advanced`.
+- Under sv-ttk, colours set on `ttk.Label` styles are overwritten by
+  `tk_setPalette` on every style change; `theme.paint_label` copies the
+  style colours onto the widget so captions and banners keep them.
+
 ## [0.2.0] - 2026-04-16
 
 CSV promoted to a first-class input and output format in parity with

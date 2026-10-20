@@ -102,6 +102,56 @@ class TestExcelFormatter:
         assert any(".html" in r.message for r in caplog.records)
 
 
+class TestRowMatchReport:
+    """Summary blocks for comparisons made with ignore_row_order=True."""
+
+    @pytest.fixture
+    def unordered_result(self) -> ComparisonResult:
+        df1 = pd.DataFrame({"id": ["a", "b", "c"], "sum": [1.5, 2.0, 3.25]})
+        df2 = pd.DataFrame({"id": ["c", "a", "b"], "sum": [3.25, 1.5, 2.0]})
+        return AdvancedComparator().compare(df1, df2, ignore_row_order=True)
+
+    def test_excel_summary_has_row_match_block(
+        self, unordered_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(unordered_result, out, file1_name="A", file2_name="B")
+        wb = load_workbook(out, read_only=True)
+        try:
+            rows = [list(r) for r in wb["Сводка"].iter_rows(values_only=True)]
+        finally:
+            wb.close()
+        labels = {row[0]: row[1] for row in rows if row and row[0]}
+        assert "Сопоставление строк (без учёта порядка):" in labels
+        assert labels["Итог:"] == "Совпадают"
+        assert labels["Ключевые столбцы:"] == "вся строка"
+        assert labels["Совпало строк:"] == 3
+        assert labels["Порядок строк отличается:"] == "да"
+        totals_row = next(row for row in rows if row[0] == "sum")
+        assert totals_row[1:4] == [6.75, 6.75, 0]
+
+    def test_excel_summary_unchanged_without_option(
+        self, simple_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(simple_result, out, file1_name="A", file2_name="B")
+        wb = load_workbook(out, read_only=True)
+        try:
+            cells = [c for r in wb["Сводка"].iter_rows(values_only=True) for c in r if c]
+        finally:
+            wb.close()
+        assert "Сопоставление строк (без учёта порядка):" not in cells
+
+    def test_html_has_row_match_cards(
+        self, unordered_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "r.html"
+        HTMLOutputFormatter().format(unordered_result, out, file1_name="A", file2_name="B")
+        content = out.read_text(encoding="utf-8")
+        assert "Совпало строк" in content
+        assert "Совпадают" in content
+
+
 class TestHTMLFormatter:
     def test_format_writes_html(self, simple_result: ComparisonResult, tmp_path: Path) -> None:
         out = tmp_path / "r.html"

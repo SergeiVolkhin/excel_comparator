@@ -25,6 +25,8 @@ class TestDefaults:
     def test_comparison_defaults(self) -> None:
         s = ComparisonSettings()
         assert s.ignore_case is False
+        assert s.ignore_row_order is True
+        assert s.key_columns == []
         assert s.highlight_color == "FFFF00"
         assert s.list_separator == ","
 
@@ -72,6 +74,8 @@ class TestPersistence:
 
     def test_save_then_load_roundtrip(self, config: AppConfig) -> None:
         config.comparison.ignore_case = True
+        config.comparison.ignore_row_order = False
+        config.comparison.key_columns = ["dt", "idUser"]
         config.log_level = "DEBUG"
         config.save_config()
         assert config.config_path.exists()
@@ -79,6 +83,8 @@ class TestPersistence:
         # Read raw JSON to confirm structure
         data = json.loads(config.config_path.read_text(encoding="utf-8"))
         assert data["comparison"]["ignore_case"] is True
+        assert data["comparison"]["ignore_row_order"] is False
+        assert data["comparison"]["key_columns"] == ["dt", "idUser"]
         assert data["log_level"] == "DEBUG"
 
         # Now load into a fresh object
@@ -87,6 +93,8 @@ class TestPersistence:
         fresh.config_path = config.config_path
         fresh.load_config()
         assert fresh.comparison.ignore_case is True
+        assert fresh.comparison.ignore_row_order is False
+        assert fresh.comparison.key_columns == ["dt", "idUser"]
         assert fresh.log_level == "DEBUG"
 
     def test_redundant_identical_save_is_skipped(
