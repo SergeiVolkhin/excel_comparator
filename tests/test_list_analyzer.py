@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from src.analyzers.list_analyzer import BasicDifferenceAnalyzer, ListDifferenceAnalyzer
@@ -116,3 +117,40 @@ class TestBasicDifferenceAnalyzer:
     def test_type_change(self, basic_analyzer: BasicDifferenceAnalyzer) -> None:
         result = basic_analyzer.analyze(123, "123", "test_column")
         assert result.difference_type == "type_change"
+
+
+class TestBasicDifferenceAnalyzerNumbers:
+    @pytest.mark.parametrize(
+        ("old", "new", "expected"),
+        [
+            (1000.0, 100.0, "1000 → 100 (-900)"),
+            (100, 1000, "100 → 1000 (+900)"),
+            # Decimal arithmetic: no 0.04999999999999 tail
+            (2414.45, 2414.5, "2414.45 → 2414.5 (+0.05)"),
+            (np.float64(0.1), np.float64(0.3), "0.1 → 0.3 (+0.2)"),
+            (np.int64(3), np.int64(5), "3 → 5 (+2)"),
+            (3, 2.5, "3 → 2.5 (-0.5)"),
+        ],
+    )
+    def test_delta(
+        self, basic_analyzer: BasicDifferenceAnalyzer, old: object, new: object, expected: str
+    ) -> None:
+        assert basic_analyzer.analyze(old, new, "c").description == expected
+
+    def test_whole_float_has_no_trailing_zero(
+        self, basic_analyzer: BasicDifferenceAnalyzer
+    ) -> None:
+        assert basic_analyzer.analyze(998702019.0, None, "c").description == "998702019 → NULL"
+
+    @pytest.mark.parametrize(
+        ("old", "new", "expected"),
+        [
+            (True, False, "True → False"),
+            (float("inf"), 1.0, "inf → 1"),
+            (5, "5", "5 → 5"),
+        ],
+    )
+    def test_no_delta(
+        self, basic_analyzer: BasicDifferenceAnalyzer, old: object, new: object, expected: str
+    ) -> None:
+        assert basic_analyzer.analyze(old, new, "c").description == expected

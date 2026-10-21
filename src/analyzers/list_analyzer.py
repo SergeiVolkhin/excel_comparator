@@ -3,9 +3,12 @@
 """
 
 import logging
+import math
 from collections import Counter
+from decimal import Decimal
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ..core.interfaces import DifferenceDetail, IDifferenceAnalyzer
@@ -266,8 +269,11 @@ class BasicDifferenceAnalyzer(IDifferenceAnalyzer):
         formatted_old = self._format_value(old_value)
         formatted_new = self._format_value(new_value)
 
-        # Создаем описание
+        # Создаем описание; для двух чисел — с разницей «новое − старое»
         description = f"{formatted_old} → {formatted_new}"
+        delta = self._numeric_delta(old_value, new_value)
+        if delta is not None:
+            description += f" ({delta})"
 
         return DifferenceDetail(
             column=column,
@@ -309,6 +315,9 @@ class BasicDifferenceAnalyzer(IDifferenceAnalyzer):
         """
         if pd.isna(value):
             return "NULL"
+        elif isinstance(value, float) and value.is_integer():
+            # 998702019.0 → 998702019: целое число, пришедшее как float
+            return str(int(value))
         elif isinstance(value, (int, float)):
             return str(value)
         elif isinstance(value, str):
@@ -318,3 +327,33 @@ class BasicDifferenceAnalyzer(IDifferenceAnalyzer):
             return value
         else:
             return str(value)
+
+    @staticmethod
+    def _numeric_delta(old_value: Any, new_value: Any) -> str | None:
+        """Разница «новое − старое» со знаком (``-900``, ``+0.05``) или ``None``.
+
+        Считается в Decimal от кратчайшей записи числа, поэтому
+        2414.5 − 2414.45 даёт 0.05, а не 0.04999999999999.
+        """
+        if not (_is_plain_number(old_value) and _is_plain_number(new_value)):
+            return None
+        delta = _to_decimal(new_value) - _to_decimal(old_value)
+        text = format(delta.normalize(), "f")
+        return text if delta <= 0 else f"+{text}"
+
+
+def _is_plain_number(value: Any) -> bool:
+    """Конечное int/float (в т.ч. numpy), но не bool."""
+    if isinstance(value, (bool, np.bool_)):
+        return False
+    if isinstance(value, (int, np.integer)):
+        return True
+    return isinstance(value, (float, np.floating)) and math.isfinite(value)
+
+
+def _to_decimal(value: int | float) -> Decimal:
+    """Decimal из кратчайшей записи числа: str, а не repr — у numpy 2
+    ``repr(np.float64(1.0))`` равно ``'np.float64(1.0)'``."""
+    if isinstance(value, (int, np.integer)):
+        return Decimal(int(value))
+    return Decimal(str(float(value)))

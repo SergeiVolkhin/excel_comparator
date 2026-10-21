@@ -10,7 +10,7 @@ import pandas as pd
 from ..core.exceptions import ComparisonError
 from ..core.interfaces import ComparisonResult, IComparator
 from ._shared import build_differences_mask, preprocess_dataframe
-from .row_matching import align_unordered
+from .row_matching import align_unordered, positional_row_pairs
 
 
 class BasicComparator(IComparator):
@@ -68,6 +68,7 @@ class BasicComparator(IComparator):
             file1_data=df1.copy(),
             file2_data=df2.copy(),
             metadata=metadata,
+            row_pairs=positional_row_pairs(differences_mask, len(df1), len(df2)),
         )
 
     def _compare_ignoring_row_order(

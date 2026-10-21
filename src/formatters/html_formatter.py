@@ -14,6 +14,7 @@ import pandas as pd
 
 from ..core.exceptions import ApplicationError
 from ..core.interfaces import ComparisonResult, IOutputFormatter
+from ..core.result_summary import floor_percentage
 
 #: Default rows-per-page threshold before the report switches to a
 #: paginated structure (one index + N page files).
@@ -327,7 +328,7 @@ class HTMLOutputFormatter(IOutputFormatter):
                     <div class="stat-label">Различий</div>
                 </div>
                 <div class="stat-card similarity-{similarity_class}">
-                    <div class="stat-value">{similarity:.1f}%</div>
+                    <div class="stat-value">{floor_percentage(similarity):.2f}%</div>
                     <div class="stat-label">Схожесть</div>
                 </div>
         """
@@ -371,7 +372,11 @@ class HTMLOutputFormatter(IOutputFormatter):
         cards = [
             (verdict, "Итог без учёта порядка строк"),
             (row_match["equal"], "Совпало строк"),
-            (row_match["modified"], "Совпало по ключу, есть отличия"),
+            (row_match["modified"], "Изменённые строки (пара найдена)"),
+        ]
+        if not row_match.get("key_columns"):
+            cards.append((row_match.get("similar", 0), "из них по сходству"))
+        cards += [
             (row_match["only_in_file1"], "Только в первом файле"),
             (row_match["only_in_file2"], "Только во втором файле"),
             (order, "Порядок строк отличается"),

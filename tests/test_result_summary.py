@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from src.comparators.advanced_comparator import AdvancedComparator
-from src.core.result_summary import human_size, next_free_path, summarize
+from src.core.result_summary import floor_percentage, human_size, next_free_path, summarize
 
 NBSP = " "
 
@@ -59,6 +59,14 @@ class TestRowSummary:
         assert "с отличиями" not in summary.details
         assert "только в первом: 1" in summary.details
 
+    def test_differences_found_by_similarity(self) -> None:
+        row_match = _row_match(equal=1966, modified=1, similar=1, identical=False)
+        summary = summarize({"row_match": row_match})
+        assert summary.details == (
+            f"Совпало строк: 1{NBSP}966 · с отличиями: 1 (по сходству: 1) · "
+            "только в первом: 0 · только во втором: 0"
+        )
+
     def test_real_comparison_metadata(self) -> None:
         df1 = pd.DataFrame({"id": [1, 2, 3], "v": [10, 20, 30]})
         df2 = pd.DataFrame({"id": [3, 1, 2], "v": [30, 10, 20]})
@@ -72,6 +80,14 @@ class TestCellSummary:
         assert summary.ok is True
         assert summary.headline == "Файлы совпадают"
         assert summary.details == f"Сравнено ячеек: 17{NBSP}703"
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [(99.9999, 99.99), (100.0, 100.0), (57.3, 57.3), (0.0, 0.0)],
+    )
+    def test_floor_percentage(self, value: float, expected: float) -> None:
+        # 57.3 * 100 is 5729.999… in floats; it must not drop to 57.29.
+        assert floor_percentage(value) == expected
 
     def test_one_cell_never_shows_100_percent(self) -> None:
         metadata = {"total_cells": 63909, "different_cells": 1, "similarity_percentage": 99.9984}

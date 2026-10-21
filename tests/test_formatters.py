@@ -12,6 +12,7 @@ from openpyxl import load_workbook
 from src.comparators.advanced_comparator import AdvancedComparator
 from src.comparators.basic_comparator import BasicComparator
 from src.core.interfaces import ComparisonResult
+from src.formatters import excel_formatter
 from src.formatters.excel_formatter import (
     COLUMN_WIDTH_SAMPLE_ROWS,
     EXCEL_LARGE_ROW_THRESHOLD,
@@ -40,8 +41,9 @@ class TestExcelFormatter:
         ExcelOutputFormatter().format(simple_result, out, file1_name="FileA", file2_name="FileB")
         wb = load_workbook(out, read_only=True)
         try:
-            # Two data sheets (file stems, possibly truncated) + a summary sheet
-            assert len(wb.sheetnames) == 3
+            # Summary, the differences-only sheet, then the two data sheets
+            # (file stems, possibly truncated)
+            assert wb.sheetnames == ["Сводка", "Расхождения", "FileA", "FileB"]
         finally:
             wb.close()
 
@@ -177,3 +179,129 @@ class TestHTMLFormatter:
         pages = list(tmp_path.glob("r_page_*.html"))
         assert len(pages) >= 2
         assert out.exists()
+
+
+def _sheet_rows(path: Path, sheet: str) -> list[list[object]]:
+    wb = load_workbook(path, read_only=True)
+    try:
+        return [list(r) for r in wb[sheet].iter_rows(values_only=True)]
+    finally:
+        wb.close()
+
+
+class TestDifferencesSheet:
+    """The «Расхождения» sheet lists only the rows with differences."""
+
+    @pytest.fixture
+    def similar_result(self) -> ComparisonResult:
+        # «b» changed its sum, «d» exists only in file 2, the order differs.
+        df1 = pd.DataFrame({"id": ["a", "b", "c"], "sum": [1.5, 2.0, 3.25]})
+        df2 = pd.DataFrame({"id": ["c", "d", "a", "b"], "sum": [3.25, 9.0, 1.5, 2.5]})
+        return AdvancedComparator().compare(df1, df2, ignore_row_order=True)
+
+    def _format(self, result: ComparisonResult, tmp_path: Path, **options: object) -> Path:
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(result, out, file1_name="A", file2_name="B", **options)
+        return out
+
+    def test_pair_takes_two_lines_and_only_row_one(
+        self, similar_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        rows = _sheet_rows(self._format(similar_result, tmp_path), "Расхождения")
+        assert rows == [
+            ["№", "Статус", "Файл", "Строка в файле", "id", "sum", "Что изменилось"],
+            # Source row numbers: header is row 1, so position + 2.
+            [1, "Изменена (по сходству)", 1, 3, "b", 2, "sum: 2 → 2.5 (+0.5)"],
+            [1, "Изменена (по сходству)", 2, 5, "b", 2.5, None],
+            [2, "Только в файле 2", 2, 3, "d", 9, None],
+        ]
+
+    def test_only_changed_cells_are_highlighted(
+        self, similar_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        wb = load_workbook(self._format(similar_result, tmp_path))
+        try:
+            sheet = wb["Расхождения"]
+            for row in (2, 3):  # both lines of the pair
+                assert sheet.cell(row=row, column=6).fill.fgColor.rgb == "00FFFF00"  # sum
+                assert sheet.cell(row=row, column=5).fill.fill_type is None  # id
+            assert sheet.cell(row=4, column=6).fill.fill_type is None  # only in file 2
+            assert sheet.freeze_panes == "A2"
+        finally:
+            wb.close()
+
+    def test_first_data_row_option_shifts_row_numbers(
+        self, similar_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        rows = _sheet_rows(self._format(similar_result, tmp_path, first_data_row=5), "Расхождения")
+        assert [row[3] for row in rows[1:]] == [6, 8, 6]
+
+    def test_data_sheets_describe_file1_to_file2(
+        self, similar_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        out = self._format(similar_result, tmp_path)
+        for sheet in ("A", "B"):
+            rows = _sheet_rows(out, sheet)
+            assert rows[2][2] == "sum: 2 → 2.5 (+0.5)"  # the same direction on both sheets
+            assert rows[4][2] == "Только в файле 2"  # not «NULL → d | NULL → 9»
+
+    def test_no_differences(self, tmp_path: Path) -> None:
+        df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+        rows = _sheet_rows(
+            self._format(BasicComparator().compare(df, df.copy()), tmp_path), "Расхождения"
+        )
+        assert len(rows) == 2
+        assert rows[1][1] == "Расхождений нет"
+
+    def test_positional_comparison(self, simple_result: ComparisonResult, tmp_path: Path) -> None:
+        rows = _sheet_rows(self._format(simple_result, tmp_path), "Расхождения")
+        assert rows[1:] == [
+            [1, "Изменена", 1, 3, 2, "b", "name: b → B"],
+            [1, "Изменена", 2, 3, 2, "B", None],
+        ]
+
+    def test_key_pair_label(self, tmp_path: Path) -> None:
+        df1 = pd.DataFrame({"id": ["a", "b"], "sum": [1.0, 2.0]})
+        df2 = pd.DataFrame({"id": ["b", "a"], "sum": [2.5, 1.0]})
+        result = AdvancedComparator().compare(df1, df2, ignore_row_order=True, key_columns=["id"])
+        rows = _sheet_rows(self._format(result, tmp_path), "Расхождения")
+        assert rows[1][1] == "Изменена (по ключу)"
+
+    def test_item_limit_adds_a_note(
+        self,
+        similar_result: ComparisonResult,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(excel_formatter, "DIFFERENCES_SHEET_MAX_ITEMS", 1)
+        rows = _sheet_rows(self._format(similar_result, tmp_path), "Расхождения")
+        assert len(rows) == 4  # header, the pair (two lines), the note
+        assert str(rows[3][1]).startswith("Показаны первые 1 расхождений из 2")
+
+    def test_summary_row_match_block(
+        self, similar_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        rows = _sheet_rows(self._format(similar_result, tmp_path), "Сводка")
+        labels = {row[0]: row[1] for row in rows if row and row[0]}
+        assert labels["Изменённые строки (пара найдена):"] == 1
+        assert labels["из них по сходству:"] == 1
+        assert str(labels["Примечание:"]).startswith("Пары найдены по совпадению")
+        assert labels["Только в файле 2:"] == 1
+
+    def test_similarity_is_rounded_down(
+        self, simple_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        # 99.9999 % must not be shown as 100.00 % while there are differences.
+        simple_result.metadata["similarity_percentage"] = 99.9999
+        rows = _sheet_rows(self._format(simple_result, tmp_path), "Сводка")
+        labels = {row[0]: row[1] for row in rows if row and row[0]}
+        assert labels["Процент схожести:"] == "99.99%"
+
+    def test_html_row_match_cards_show_similar(
+        self, similar_result: ComparisonResult, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "r.html"
+        HTMLOutputFormatter().format(similar_result, out, file1_name="A", file2_name="B")
+        content = out.read_text(encoding="utf-8")
+        assert "Изменённые строки (пара найдена)" in content
+        assert "из них по сходству" in content

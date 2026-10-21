@@ -223,7 +223,9 @@ def _print_row_match(row_match: dict | None) -> None:
     print(f"\nБез учёта порядка строк: {verdict}")
     print(f"  Ключевые столбцы: {key_columns}")
     print(f"  Совпало строк: {row_match['equal']}")
-    print(f"  Совпало по ключу, есть отличия: {row_match['modified']}")
+    print(f"  Изменённые строки (пара найдена): {row_match['modified']}")
+    if row_match.get("similar"):
+        print(f"    из них по сходству: {row_match['similar']}")
     print(f"  Только в первом файле: {row_match['only_in_file1']}")
     print(f"  Только во втором файле: {row_match['only_in_file2']}")
     print(f"  Порядок строк отличается: {'да' if row_match['order_changed'] else 'нет'}")
@@ -240,6 +242,7 @@ def run_cli_mode(args):
     from src.core.config import AppConfig
     from src.core.engine import ComparisonEngine, StandardComparisonStrategy
     from src.core.interfaces import ProgressReporter
+    from src.core.result_summary import floor_percentage
 
     logger = logging.getLogger("CLI")
 
@@ -331,7 +334,7 @@ def run_cli_mode(args):
         # Выводим итоговую статистику
         total_cells = result.metadata.get("total_cells", 0)
         different_cells = result.metadata.get("different_cells", 0)
-        similarity = result.metadata.get("similarity_percentage", 0)
+        similarity = floor_percentage(result.metadata.get("similarity_percentage", 0))
 
         print("\nРезультаты сравнения:")
         print(f"  Всего ячеек: {total_cells}")

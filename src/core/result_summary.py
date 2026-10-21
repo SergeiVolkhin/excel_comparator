@@ -51,10 +51,24 @@ def _summarize_rows(row_match: dict[str, Any]) -> ResultSummary:
 
     parts = [f"Совпало строк: {equal}"]
     if row_match["key_columns"] or row_match["modified"]:
-        parts.append(f"с отличиями: {_number(row_match['modified'])}")
+        modified = f"с отличиями: {_number(row_match['modified'])}"
+        similar = row_match.get("similar", 0)
+        if similar:
+            modified += f" (по сходству: {_number(similar)})"
+        parts.append(modified)
     parts.append(f"только в первом: {_number(row_match['only_in_file1'])}")
     parts.append(f"только во втором: {_number(row_match['only_in_file2'])}")
     return ResultSummary(False, "Есть расхождения", _SEPARATOR.join(parts))
+
+
+def floor_percentage(value: float) -> float:
+    """Percentage rounded down to two decimals.
+
+    A single differing cell among tens of thousands must not show up as
+    "100.00 %". The inner ``round`` drops float noise first, so 57.3 stays
+    57.3 instead of becoming 57.29.
+    """
+    return math.floor(round(float(value) * 100, 6)) / 100
 
 
 def _summarize_cells(metadata: dict[str, Any]) -> ResultSummary:
@@ -63,9 +77,7 @@ def _summarize_cells(metadata: dict[str, Any]) -> ResultSummary:
     if different == 0:
         return ResultSummary(True, "Файлы совпадают", f"Сравнено ячеек: {_number(total)}")
 
-    # Round down: a single differing cell among tens of thousands must not
-    # show up as "100,00 %".
-    similarity = math.floor(float(metadata.get("similarity_percentage", 0.0)) * 100) / 100
+    similarity = floor_percentage(metadata.get("similarity_percentage", 0.0))
     details = (
         f"Различается ячеек: {_number(different)} из {_number(total)}"
         f"{_SEPARATOR}схожесть {f'{similarity:.2f}'.replace('.', ',')} %"

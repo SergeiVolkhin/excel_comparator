@@ -13,12 +13,19 @@ import pandas as pd
 
 @dataclass
 class ComparisonResult:
-    """Результат сравнения файлов"""
+    """Результат сравнения файлов.
+
+    ``row_pairs`` — по строке на каждую выровненную строку: ``row_file1`` /
+    ``row_file2`` — позиция строки в загруженной таблице (``-1`` — строки
+    нет), ``status`` — ``STATUS_*`` из ``comparators.row_matching``.
+    ``None`` у результата, собранного вручную.
+    """
 
     differences_mask: pd.DataFrame
     file1_data: pd.DataFrame
     file2_data: pd.DataFrame
     metadata: dict[str, Any]
+    row_pairs: pd.DataFrame | None = None
 
 
 @dataclass

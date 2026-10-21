@@ -51,12 +51,14 @@ The window always uses the `advanced` comparator. How `basic` and `advanced` dif
 
 A normal comparison is positional: row 1 against row 1, row 2 against row 2. Two exports with the same rows in a different order then show almost every cell as different. The ignore-row-order mode (the **Порядок строк не важен** switch in the window, `--ignore-row-order` on the command line) works with `basic` and `advanced` and pairs rows by content:
 
-- **Without key columns** a row matches only an identical row. A row with a changed value counts as one row only in the first file and one only in the second.
+- **Without key columns** rows are paired in two passes. Identical rows come first. Then, among the rows left over, the tool looks for "the same row, changed": a pair qualifies when at least half of the columns are equal. An equal rare value (a player id, an amount) weighs more than an equal common one (0, a currency, a date). If a row has two equally good candidates it stays unpaired, because a row reported in one file only is better than a wrong pair. Such pairs are marked "по сходству" (by similarity) in the report.
 - **With key columns** rows are paired by key, and differences in the other columns are highlighted in the report as in a normal comparison.
 - Duplicate rows pair in order of appearance: two equal rows against one give one match and one row only in the first file.
 - `8000` equals `8000.0`; empty cells, `NaN` and `None` are equal; a date without a time equals the same date written as text (`2026-09-01`). Numbers stored as text are not compared with numbers.
 
-In the report the rows of the first file keep their order, each next to its match from the second file, and rows found only in the second file come last. The **Сводка** (summary) sheet gets a row-matching block: the verdict (match / differences found), how many rows matched, how many matched by key but differ, how many exist in only one file, whether the order differs, and per-file totals of the numeric columns. The totals use `math.fsum`, so row order does not change them. Go by the verdict line: the similarity percentage in the report is rounded to two decimals, so a single differing cell among tens of thousands still shows `100.00%`. The window does not have this problem: its banner states the verdict in words and rounds the percentage down.
+In the report the rows of the first file keep their order, each next to its match from the second file, and rows found only in the second file come last. The **Сводка** (summary) sheet gets a row-matching block: the verdict (match / differences found), how many rows matched, how many changed rows found their pair (and how many of them by similarity), how many exist in only one file, whether the order differs, and per-file totals of the numeric columns. The totals use `math.fsum`, so row order does not change them. The similarity percentage is rounded down: a single differing cell among tens of thousands shows `99.99%`, not `100.00%`.
+
+The **Расхождения** (differences) sheet, second after the summary, lists only the rows that differ. A changed row takes two lines, one from file 1 and one from file 2. The changed cells are highlighted, the source row number in each file is shown, and a "Что изменилось" (what changed) column reads, for example, `Sum_in_from_sum_out: 1000 → 100 (-900)`. Numeric differences are file 2 − file 1, as in the column totals. A row without a pair takes one line. The sheet shows the first 50,000 differences, and the data sheets mark all of them.
 
 ### CLI
 
@@ -70,7 +72,7 @@ The CLI always uses the `advanced` comparator. Flags:
 - `--format {xlsx,html,csv}` — force the report format instead of reading it from the output extension.
 - `--ignore-case`, `--ignore-whitespace` — same as the GUI checkboxes.
 - `--ignore-row-order` — compare without regard to row order (the "ignore row order" checkbox).
-- `--key-columns "dt,idUser"` — key columns for `--ignore-row-order`; without them rows match as a whole.
+- `--key-columns "dt,idUser"` — key columns for `--ignore-row-order`; without them rows match as a whole, and changed rows by similarity.
 - `--csv-encoding ENC` — force an input encoding instead of autodetecting with chardet.
 - `--csv-delimiter SEP` — force the delimiter instead of autodetecting it.
 - `--csv-skip-rows N` — skip the first N rows of each CSV.
@@ -97,7 +99,7 @@ python main.py --cli --file1 old.xlsx --file2 new.xlsx --output diff.xlsx \
 
 The format follows the output extension: `.xlsx`/`.xls` → Excel, `.html`/`.htm` → HTML, `.csv` → CSV, anything else → Excel. `--format` overrides that.
 
-- **Excel** — two sheets holding the source data with the differing cells highlighted, plus a summary sheet with the statistics (and, when ignoring row order, the row-matching block). Column widths are sized from the first 200 rows. Above 20,000 rows the formatter logs a warning suggesting an HTML report instead, because per-cell styling slows down at that size.
+- **Excel** — a summary sheet with the statistics (and, when ignoring row order, the row-matching block), the «Расхождения» sheet with only the rows that differ, and two sheets holding the source data with the differing cells highlighted. The «Различия» column on both data sheets describes each change in one direction, file 1 → file 2. Column widths are sized from the first 200 rows. Above 20,000 rows the formatter logs a warning suggesting an HTML report instead, because per-cell styling slows down at that size.
 - **HTML** — a summary, per-column difference counts, and the two tables side by side with differences highlighted. Tables over ~1000 rows are split into `_page_N.html` files next to the main one.
 - **CSV** — the source columns plus a trailing `__status__` column with `EQUAL`, `MODIFIED`, `ADDED` or `REMOVED`. `ADDED` rows carry the content from the second file. Encoding, delimiter and quoting are options; `diff_only` (via the API) drops the `EQUAL` rows.
 

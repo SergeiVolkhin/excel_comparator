@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Changed rows are found without key columns.** With
+  `ignore_row_order` and no `key_columns`, the rows left without an
+  identical row get a second, similarity pass (`_pair_similar_rows` in
+  `src/comparators/row_matching.py`). Two rows pair when at least half of
+  the columns are equal; candidates are scored by the summed weight of
+  their equal values (`log(N / count)` over both files, so a rare id
+  outweighs a common 0 or currency). A pair is taken only when it is the
+  clear best of both rows; a tie leaves the rows unpaired. Identical
+  leftover rows are grouped first, so duplicates pair correctly.
+  Candidates come from blocking on shared values, capped at 2 million
+  pairs, so the pass stays linear on large files: on 200 000 rows with
+  1 % changed it finds all of them in about 1.3 s.
+  `row_match["similar"]` counts such pairs; they are part of `modified`.
+- `ComparisonResult.row_pairs` (all comparators): the source row of each
+  aligned row in both files and its status (`equal`, `modified`,
+  `similar`, `only_file1`, `only_file2`).
+- Excel: «Расхождения» sheet with only the rows that differ. A changed
+  row takes two lines (file 1 and file 2) with the changed cells
+  highlighted, the source row number in each file and a «Что изменилось»
+  column such as `Sum_in_from_sum_out: 1000 → 100 (-900)`. The sheet is
+  capped at 50 000 differences. The engine passes `first_data_row` to the
+  formatter (header row and CSV `skiprows` taken into account).
+- Numeric differences are described with their delta, file 2 − file 1,
+  computed in `Decimal` (`2414.45 → 2414.5 (+0.05)`).
+
 - **Order-independent comparison** — new `ignore_row_order` option for
   both `BasicComparator` and `AdvancedComparator`
   (`src/comparators/row_matching.py`). Rows are paired by content, or by
@@ -58,6 +83,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python 3.13, `>=2.1.0,<3.0.0` on 3.13+ (numpy 1.x has no wheels there).
 - `main.run_cli_mode` builds loader options in `_build_loader_options()`
   (complexity back under the `C901` limit).
+- Excel data sheets: the «Различия» column describes each change file 1 →
+  file 2 on both sheets (the second sheet used to read file 2 → file 1),
+  and a row without a pair reads «Только в файле 1 / 2» instead of one
+  «value → NULL» per cell. Row-matching labels: «Совпало по ключу, есть
+  отличия» → «Изменённые строки (пара найдена)», plus «из них по сходству»
+  in the Excel summary, the HTML cards, the CLI printout and the GUI
+  banner.
 
 ### Removed
 
@@ -74,6 +106,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Under sv-ttk, colours set on `ttk.Label` styles are overwritten by
   `tk_setPalette` on every style change; `theme.paint_label` copies the
   style colours onto the widget so captions and banners keep them.
+- **A changed row was reported as two unrelated rows.** Without key
+  columns, a row with one changed cell went to «только в файле 1» and
+  «только в файле 2», and the report listed all its cells as differences
+  against an empty row (18 differences for one changed cell). It is now
+  found by the similarity pass and shows one changed cell.
+- Excel and HTML reports and the CLI printout showed `100.00%` similarity
+  with differences present (round-half-up); the percentage is now rounded
+  down, as in the GUI (`result_summary.floor_percentage`, which also no
+  longer turns 57.3 into 57.29).
+- Whole numbers that arrive as floats are described without `.0`
+  (`998702019`, not `998702019.0`).
 
 ## [0.2.0] - 2026-04-16
 

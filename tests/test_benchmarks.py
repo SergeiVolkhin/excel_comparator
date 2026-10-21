@@ -14,12 +14,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from openpyxl import Workbook
 
 from src.comparators.advanced_comparator import AdvancedComparator
 from src.comparators.basic_comparator import BasicComparator
+from src.comparators.row_matching import align_unordered
 from src.core.engine import ComparisonEngine
 from src.formatters.excel_formatter import ExcelOutputFormatter
 from src.formatters.html_formatter import HTMLOutputFormatter
@@ -88,6 +90,39 @@ class TestComparatorBenchmarks:
         comp = AdvancedComparator()
         result = benchmark(comp.compare, df1, df2)
         assert result.metadata["different_cells"] == 1
+
+
+@pytest.fixture(scope="module")
+def unordered_df_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """200k rows shaped like a player × day export; file 2 is shuffled and
+    1 % of its rows have one changed cell."""
+    rng = np.random.default_rng(0)
+    n = 200_000
+    df = pd.DataFrame(
+        {
+            "dt": rng.choice([f"2026-09-{day:02d}" for day in range(1, 31)], n),
+            "idUser": rng.integers(998_000_000, 998_020_000, n),
+            "Sum_bets": rng.choice([0.0, 500.0, 1000.0, 3500.0], n) + np.round(rng.random(n), 2),
+            "Number_of_bets": rng.integers(0, 20, n),
+            "Sum_in_from_sum_out": rng.choice([0.0, 100.0, 500.0, 1000.0], n),
+            "Currency": ["XOF"] * n,
+        }
+    )
+    changed = df.sample(frac=1, random_state=1).reset_index(drop=True)
+    rows = rng.choice(n, n // 100, replace=False)
+    changed.loc[rows, "Sum_in_from_sum_out"] += 1
+    return df, changed
+
+
+class TestRowMatchingBenchmarks:
+    def test_unordered_200k_with_1pct_changed(
+        self, benchmark, unordered_df_pair: tuple[pd.DataFrame, pd.DataFrame]
+    ) -> None:
+        df1, df2 = unordered_df_pair
+        alignment = benchmark(align_unordered, df1, df2, list(df1.columns))
+        # Every changed row is found by the similarity pass, none is left over.
+        assert alignment.row_match["similar"] == len(df1) // 100
+        assert alignment.row_match["only_in_file1"] == 0
 
 
 class TestFormatterBenchmarks:

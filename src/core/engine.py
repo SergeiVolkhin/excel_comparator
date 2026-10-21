@@ -232,7 +232,26 @@ class ComparisonEngine:
         formatter = self._get_formatter(formatter_name)
         format_options: dict[str, Any] = dict(options.get("format_options", {}))
         format_options.update({"file1_name": file1_path.stem, "file2_name": file2_path.stem})
+        format_options.setdefault(
+            "first_data_row", self._first_data_row(options.get("loader_options", {}))
+        )
         formatter.format(result, output_path, **format_options)
+
+    @staticmethod
+    def _first_data_row(loader_options: dict[str, Any]) -> int:
+        """Номер (с 1) первой строки данных в исходном файле.
+
+        По умолчанию строка 1 — заголовок, данные со строки 2. Учитывает
+        строку заголовка (``header``) и пропуск первых строк CSV
+        (``skiprows``, если это число).
+        """
+        skipped = loader_options.get("skiprows", 0)
+        if not isinstance(skipped, int):
+            skipped = 0
+        header = loader_options.get("header", 0)
+        if header is None:
+            return skipped + 1
+        return skipped + int(header) + 2
 
     def _find_file_loader(self, file_path: Path) -> IFileLoader:
         """Находит подходящий загрузчик для файла"""

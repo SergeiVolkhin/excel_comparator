@@ -202,6 +202,26 @@ class TestRunCLIMode:
         assert "Без учёта порядка строк: совпадают" in printed
         assert "Ключевые столбцы: id" in printed
 
+    def test_ignore_row_order_prints_rows_found_by_similarity(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        a = tmp_path / "a.csv"
+        b = tmp_path / "b.csv"
+        pd.DataFrame({"id": [1, 2, 3], "name": ["A", "B", "C"]}).to_csv(a, index=False)
+        pd.DataFrame({"id": [3, 1, 2], "name": ["C", "A", "b"]}).to_csv(b, index=False)
+
+        cli_main.run_cli_mode(
+            self._make_args(
+                file1=str(a), file2=str(b), output=str(tmp_path / "r.xlsx"), ignore_row_order=True
+            )
+        )
+        printed = capsys.readouterr().out
+        # 1 differing cell of 6 → 83.33 %, rounded down like the report
+        assert "Схожесть: 83.33%" in printed
+        assert "Изменённые строки (пара найдена): 1" in printed
+        assert "из них по сходству: 1" in printed
+        assert "Только в первом файле: 0" in printed
+
     def test_missing_files_exit_code(self, tmp_path: Path) -> None:
         with pytest.raises(SystemExit) as exc:
             cli_main.run_cli_mode(

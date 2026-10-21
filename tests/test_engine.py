@@ -182,3 +182,37 @@ class TestLoadInfoSizeCheck:
         a, b = identical_csv_pair
         result = engine.compare_files(a, b, tmp_path / "out.xlsx", comparator_name="advanced")
         assert "load_info" not in result.metadata
+
+
+class TestFirstDataRow:
+    """Row numbers on the differences sheet start at the first data row."""
+
+    @pytest.mark.parametrize(
+        ("loader_options", "expected"),
+        [
+            ({}, 2),
+            ({"header": 2}, 4),
+            ({"skiprows": 3}, 5),
+            ({"skiprows": [0, 2]}, 2),  # a list of rows is not a leading skip
+            ({"header": None}, 1),
+        ],
+    )
+    def test_first_data_row(self, loader_options: dict[str, object], expected: int) -> None:
+        assert ComparisonEngine._first_data_row(loader_options) == expected
+
+    def test_passed_to_formatter(self, engine: ComparisonEngine, tmp_path: Path) -> None:
+        df = pd.DataFrame({"id": [1, 2], "name": ["a", "b"]})
+        a = _write_csv(tmp_path / "a.csv", df)
+        b = _write_csv(tmp_path / "b.csv", df.assign(name=["a", "B"]))
+        received: dict[str, object] = {}
+
+        class Recorder:
+            def format(self, result: ComparisonResult, output_path: Path, **options: object):
+                received.update(options)
+
+            def get_supported_formats(self) -> list[str]:
+                return [".xlsx"]
+
+        engine.register_formatter("excel", Recorder())  # type: ignore[arg-type]
+        engine.compare_files(a, b, tmp_path / "r.xlsx", loader_options={"skiprows": 0, "header": 0})
+        assert received["first_data_row"] == 2

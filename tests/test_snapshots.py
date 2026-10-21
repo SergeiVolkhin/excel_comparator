@@ -41,8 +41,8 @@ class TestExcelSnapshot:
 
         snap = xlsx_to_dict(out)
 
-        # Three sheets: two data sheets + summary
-        assert len(snap) == 3
+        # Four sheets: summary, differences-only sheet, two data sheets
+        assert len(snap) == 4
 
         # Column headers (id / name) appear somewhere on each data sheet;
         # formatter prepends a title row, so we scan all rows.
