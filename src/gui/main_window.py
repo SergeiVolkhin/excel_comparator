@@ -10,7 +10,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 from typing import Any
 
 from ..comparators.row_matching import parse_key_columns
@@ -19,6 +19,7 @@ from ..core.engine import ComparisonEngine, StandardComparisonStrategy
 from ..core.exceptions import FileLoadError
 from ..core.interfaces import ProgressReporter
 from ..core.result_summary import DEFAULT_REPORT_NAME, next_free_path, summarize
+from .help_window import HelpWindow
 from .theme import apply_theme, make_app_icon, paint_labels, set_title_bar_theme
 from .widgets import ElidedLabel, Expander, FileCard, ProgressRow, ResultPanel
 
@@ -73,6 +74,7 @@ class MainWindow:
         self._events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._running = False
         self._lockable: list[ttk.Widget] = []
+        self._help: HelpWindow | None = None
 
         self._build()
         self._register_drop_targets()
@@ -399,31 +401,12 @@ class MainWindow:
             subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path.parent)])
 
     def show_help(self) -> None:
-        first_step = (
-            "1. Перетащите два файла в окно или нажмите «Выбрать…» на карточках.\n"
-            if self.dnd_enabled
-            else "1. Нажмите «Выбрать…» на обеих карточках.\n"
-        )
-        messagebox.showinfo(
-            "Как пользоваться",
-            first_step + "2. Нажмите «Сравнить» или Enter.\n"
-            "3. Итог появится внизу окна. «Открыть отчёт» откроет файл Excel,\n"
-            "    где различия подсвечены.\n\n"
-            "«Порядок строк не важен»: строки ищутся по содержимому, их порядок\n"
-            "в файлах может отличаться. Выключите, чтобы сравнивать первую строку\n"
-            "с первой, вторую со второй.\n\n"
-            "В «Дополнительно»:\n"
-            "• Ключевые столбцы, например dt, idUser: строки сопоставляются по ним,\n"
-            "  а отличия в остальных столбцах подсвечиваются в отчёте.\n"
-            "• Игнорировать регистр и пробелы, пропускать повреждённые строки CSV.\n"
-            "• Полные листы данных для больших файлов: до 100 000 строк копии обоих\n"
-            "  файлов с подсветкой есть в отчёте всегда, больше — только с этой\n"
-            "  галочкой (запись заметно дольше). Все отличия всегда на листе\n"
-            "  «Расхождения».\n"
-            "• Куда сохранить отчёт. По умолчанию рядом с первым файлом; старые\n"
-            "  отчёты не перезаписываются: «Сравнение (2).xlsx», «Сравнение (3).xlsx»…",
-            parent=self.root,
-        )
+        """Справка: одно окно; повторное нажатие «?» / F1 поднимает его"""
+        if self._help is not None and self._help.winfo_exists():
+            self._help.lift()
+            self._help.focus_set()
+            return
+        self._help = HelpWindow(self.root, self.theme, self.dnd_enabled)
 
     # ------------------------------------------------------------------
     # Сравнение

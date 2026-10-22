@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Help («?» / F1) is a window in the app's own look (`src/gui/help_window.py`,
+  light and dark) instead of a plain message box: three numbered steps,
+  what each report sheet shows, the settings in one line each and the
+  keys. Modal, one instance, closes with «Понятно», Enter or Esc.
 - GUI defaults to «Порядок строк не важен» (`ignore_row_order=True` in
   `ComparisonSettings`); the CLI keeps its explicit flag.
 - The report goes next to the first file by default instead of

@@ -126,8 +126,8 @@ def paint_labels(widget: tk.Misc) -> None:
         paint_labels(child)
 
 
-def set_title_bar_theme(root: tk.Tk, dark: bool) -> None:
-    """Тёмный или светлый заголовок окна Windows 10/11 (DWM)"""
+def set_title_bar_theme(root: tk.Misc, dark: bool) -> None:
+    """Тёмный или светлый заголовок окна Windows 10/11 (DWM): главного или диалога"""
     if sys.platform != "win32":
         return
     try:
