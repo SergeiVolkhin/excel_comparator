@@ -8,9 +8,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.core.engine import ComparisonEngine, StandardComparisonStrategy
+from src.core.engine import PROGRESS_COMPARED, ComparisonEngine, StandardComparisonStrategy
 from src.core.exceptions import ApplicationError, UnsupportedFormatError
-from src.core.interfaces import ComparisonResult
+from src.core.interfaces import ComparisonResult, ProgressReporter
+from src.formatters import excel_formatter
 
 from .conftest import _write_csv, _write_xlsx
 
@@ -216,3 +217,59 @@ class TestFirstDataRow:
         engine.register_formatter("excel", Recorder())  # type: ignore[arg-type]
         engine.compare_files(a, b, tmp_path / "r.xlsx", loader_options={"skiprows": 0, "header": 0})
         assert received["first_data_row"] == 2
+
+
+class TestProgress:
+    """The progress keeps moving through every stage, including the report."""
+
+    @staticmethod
+    def _recorder() -> tuple[ProgressReporter, list[tuple[int, str]]]:
+        events: list[tuple[int, str]] = []
+
+        class Observer:
+            def on_progress(self, current: int, total: int, message: str = "") -> None:
+                events.append((current, message))
+
+            def on_error(self, error: Exception) -> None:
+                pass
+
+            def on_completion(self, message: str = "") -> None:
+                pass
+
+        reporter = ProgressReporter()
+        reporter.add_observer(Observer())  # type: ignore[arg-type]
+        return reporter, events
+
+    def test_stages_and_report_progress(
+        self, engine: ComparisonEngine, xlsx_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(excel_formatter, "PROGRESS_CHUNK_ROWS", 2)
+        df = pd.DataFrame({"id": range(10), "v": range(10)})
+        a = _write_xlsx(xlsx_dir / "a.xlsx", {"Sheet1": df})
+        b = _write_xlsx(xlsx_dir / "b.xlsx", {"Sheet1": df.assign(v=range(1, 11))})
+        reporter, events = self._recorder()
+
+        engine.compare_files(a, b, xlsx_dir / "out.xlsx", progress_reporter=reporter)
+
+        percents = [percent for percent, _ in events]
+        assert percents == sorted(percents)
+        assert percents[-1] == 100
+        messages = [message for _, message in events]
+        assert sum("Загружен" in message for message in messages) == 2
+        # Between "compared" and "done" the report writing reports its rows
+        report = [p for p, m in events if PROGRESS_COMPARED < p < 100 and "Отчёт" in m]
+        assert len(report) >= 3
+
+    def test_both_files_are_loaded(self, engine: ComparisonEngine, xlsx_dir: Path) -> None:
+        df1 = pd.DataFrame({"id": [1, 2], "v": ["a", "b"]})
+        df2 = pd.DataFrame({"id": [1, 2, 3], "v": ["a", "x", "c"]})
+        a = _write_xlsx(xlsx_dir / "a.xlsx", {"Sheet1": df1})
+        b = _write_xlsx(xlsx_dir / "b.xlsx", {"Sheet1": df2})
+        loaded1, loaded2 = engine._load_pair(a, b, {})
+        pd.testing.assert_frame_equal(loaded1, df1)
+        pd.testing.assert_frame_equal(loaded2, df2)
+
+    def test_load_error_is_raised(self, engine: ComparisonEngine, xlsx_dir: Path) -> None:
+        a = _write_xlsx(xlsx_dir / "a.xlsx", {"Sheet1": pd.DataFrame({"id": [1]})})
+        with pytest.raises(ApplicationError):
+            engine._load_pair(a, xlsx_dir / "missing.xlsx", {})

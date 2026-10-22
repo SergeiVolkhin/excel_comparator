@@ -262,26 +262,24 @@ class BasicDifferenceAnalyzer(IDifferenceAnalyzer):
         Returns:
             DifferenceDetail: Детальная информация о различиях
         """
-        # Определяем тип различия
-        difference_type = self._determine_type(old_value, new_value)
-
-        # Форматируем значения для отображения
-        formatted_old = self._format_value(old_value)
-        formatted_new = self._format_value(new_value)
-
-        # Создаем описание; для двух чисел — с разницей «новое − старое»
-        description = f"{formatted_old} → {formatted_new}"
-        delta = self._numeric_delta(old_value, new_value)
-        if delta is not None:
-            description += f" ({delta})"
-
         return DifferenceDetail(
             column=column,
             old_value=old_value,
             new_value=new_value,
-            difference_type=difference_type,
-            description=description,
+            difference_type=self._determine_type(old_value, new_value),
+            description=self.describe(old_value, new_value),
         )
+
+    @classmethod
+    def describe(cls, old_value: Any, new_value: Any) -> str:
+        """Текст различия «старое → новое», для двух чисел — с разницей.
+
+        То же описание, что в ``analyze``, без построения ``DifferenceDetail``:
+        отчёт вызывает его напрямую на сотнях тысяч ячеек.
+        """
+        description = f"{cls._format_value(old_value)} → {cls._format_value(new_value)}"
+        delta = cls._numeric_delta(old_value, new_value)
+        return description if delta is None else f"{description} ({delta})"
 
     def _determine_type(self, old_value: Any, new_value: Any) -> str:
         """
@@ -303,7 +301,8 @@ class BasicDifferenceAnalyzer(IDifferenceAnalyzer):
         else:
             return "value_change"
 
-    def _format_value(self, value: Any) -> str:
+    @staticmethod
+    def _format_value(value: Any) -> str:
         """
         Форматирует значение для отображения в описании
 

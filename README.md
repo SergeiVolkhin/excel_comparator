@@ -7,7 +7,7 @@ It runs as a desktop app (tkinter) or from the command line. Reports come out as
 ## Requirements
 
 - Python 3.11 or newer
-- pandas, numpy, openpyxl, chardet, python-dateutil
+- pandas, numpy, openpyxl, python-calamine, XlsxWriter, chardet, python-dateutil
 - for the GUI: sv-ttk (Windows 11 look) and tkinterdnd2 (drag and drop of files)
 
 The exact version ranges are in [requirements.txt](requirements.txt). The GUI needs tkinter, which ships with the standard CPython installer on Windows and macOS. On Linux install it from your package manager, e.g. `apt install python3-tk`. If sv-ttk or tkinterdnd2 fails to load, the window still opens, with the stock look and without drag and drop.
@@ -58,7 +58,7 @@ A normal comparison is positional: row 1 against row 1, row 2 against row 2. Two
 
 In the report the rows of the first file keep their order, each next to its match from the second file, and rows found only in the second file come last. The **Сводка** (summary) sheet gets a row-matching block: the verdict (match / differences found), how many rows matched, how many changed rows found their pair (and how many of them by similarity), how many exist in only one file, whether the order differs, and per-file totals of the numeric columns. The totals use `math.fsum`, so row order does not change them. The similarity percentage is rounded down: a single differing cell among tens of thousands shows `99.99%`, not `100.00%`.
 
-The **Расхождения** (differences) sheet, second after the summary, lists only the rows that differ. A changed row takes two lines, one from file 1 and one from file 2. The changed cells are highlighted, the source row number in each file is shown, and a "Что изменилось" (what changed) column reads, for example, `Sum_in_from_sum_out: 1000 → 100 (-900)`. Numeric differences are file 2 − file 1, as in the column totals. A row without a pair takes one line. The sheet shows the first 50,000 differences, and the data sheets mark all of them.
+The **Расхождения** (differences) sheet, second after the summary, lists only the rows that differ. A changed row takes two lines, one from file 1 and one from file 2. The changed cells are highlighted, the source row number in each file is shown, and a "Что изменилось" (what changed) column reads, for example, `Sum_in_from_sum_out: 1000 → 100 (-900)`. Numeric differences are file 2 − file 1, as in the column totals. A row without a pair takes one line. The sheet lists every difference that fits into one Excel sheet (1,048,576 rows).
 
 ### CLI
 
@@ -73,6 +73,7 @@ The CLI always uses the `advanced` comparator. Flags:
 - `--ignore-case`, `--ignore-whitespace` — same as the GUI checkboxes.
 - `--ignore-row-order` — compare without regard to row order (the "ignore row order" checkbox).
 - `--key-columns "dt,idUser"` — key columns for `--ignore-row-order`; without them rows match as a whole, and changed rows by similarity.
+- `--full-data-sheets` — full data sheets in the Excel report even for tables over 100,000 rows (the "Полные листы данных для больших файлов" checkbox).
 - `--csv-encoding ENC` — force an input encoding instead of autodetecting with chardet.
 - `--csv-delimiter SEP` — force the delimiter instead of autodetecting it.
 - `--csv-skip-rows N` — skip the first N rows of each CSV.
@@ -99,11 +100,26 @@ python main.py --cli --file1 old.xlsx --file2 new.xlsx --output diff.xlsx \
 
 The format follows the output extension: `.xlsx`/`.xls` → Excel, `.html`/`.htm` → HTML, `.csv` → CSV, anything else → Excel. `--format` overrides that.
 
-- **Excel** — a summary sheet with the statistics (and, when ignoring row order, the row-matching block), the «Расхождения» sheet with only the rows that differ, and two sheets holding the source data with the differing cells highlighted. The «Различия» column on both data sheets describes each change in one direction, file 1 → file 2. Column widths are sized from the first 200 rows. Above 20,000 rows the formatter logs a warning suggesting an HTML report instead, because per-cell styling slows down at that size.
+- **Excel** — a summary sheet with the statistics (and, when ignoring row order, the row-matching block), the «Расхождения» sheet with only the rows that differ, and two sheets holding the source data with the differing cells highlighted. The «Различия» column on both data sheets describes each change in one direction, file 1 → file 2. The data sheets are written for tables up to 100,000 rows. Above that they need the "Полные листы данных для больших файлов" checkbox or `--full-data-sheets`, and the summary says they were left out. Column widths are sized from the first 200 rows. Text that looks like a formula (`=A1`) or a link stays text. The report is streamed (XlsxWriter): memory does not grow with the table, and the progress shows the writing.
 - **HTML** — a summary, per-column difference counts, and the two tables side by side with differences highlighted. Tables over ~1000 rows are split into `_page_N.html` files next to the main one.
 - **CSV** — the source columns plus a trailing `__status__` column with `EQUAL`, `MODIFIED`, `ADDED` or `REMOVED`. `ADDED` rows carry the content from the second file. Encoding, delimiter and quoting are options; `diff_only` (via the API) drops the `EQUAL` rows.
 
 CSV and TSV inputs autodetect their encoding (chardet, falling back to UTF-8) and their delimiter (chosen from `,`, `;`, tab and `|`). A byte-order mark is stripped automatically.
+
+## Large files
+
+- **Reading.** `.xlsx` and `.xls` are read with python-calamine (Rust): 5–7× faster than openpyxl with the same column types, because pandas still infers them. Both files load at the same time. Without python-calamine the program falls back to openpyxl, only slower.
+- **Comparison.** Rows are matched on integer codes of the values instead of hashing Python objects one by one.
+- **Report.** Full data sheets are written up to 100,000 rows (see above), and the report is streamed.
+- **Progress** moves through every stage: each file loaded (20 and 40 %), comparison (42–55 %), report writing in steps of 10,000 rows (55–99 %).
+
+Example: two exports of 380,598 rows × 9 columns, 16 MB xlsx each, ignoring row order.
+
+| Version | Time |
+|---|---|
+| Previous (openpyxl, full data sheets) | 145 s |
+| Current | ≈ 12 s: loading ≈ 5 s, comparison ≈ 1.5 s, report under a second |
+| Current with `--full-data-sheets` | ≈ 45–80 s, depending on machine load |
 
 ## Configuration
 
@@ -121,6 +137,7 @@ It holds the comparison defaults (the window stores the last chosen options and 
     "ignore_whitespace": false,
     "ignore_row_order": true,
     "key_columns": [],
+    "full_data_sheets": false,
     "highlight_color": "FFFF00",
     "max_differences_display": 1000,
     "enable_list_analysis": true,

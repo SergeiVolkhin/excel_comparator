@@ -40,6 +40,9 @@ class ComparisonSettings(BaseModel):
     ignore_row_order: bool = True
     # Ключевые столбцы для ignore_row_order; GUI запоминает последний ввод
     key_columns: list[str] = Field(default_factory=list)
+    # Полные листы данных в Excel-отчёте и для таблиц больше 100 000 строк
+    # (до порога они пишутся всегда)
+    full_data_sheets: bool = False
     highlight_color: str = "FFFF00"
     max_differences_display: int = 1000
     enable_list_analysis: bool = True

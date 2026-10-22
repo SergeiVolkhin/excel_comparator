@@ -414,6 +414,39 @@ class TestColumnTotals:
         assert list(totals) == ["n"]
 
 
+class TestCodes:
+    """Matching runs on integer codes; these pin down the corner cases."""
+
+    def test_empty_cell_of_a_row_in_one_file_is_not_a_difference(self) -> None:
+        # The padding of the missing side equals an empty cell, as an all-NA
+        # row always did: only the filled cells of the row are differences.
+        file1 = _rows(a=[1, 5], b=["x", None])
+        file2 = _rows(a=[1], b=["x"])
+        alignment = align_unordered(file1, file2, ["a", "b"])
+        assert alignment.row_match["only_in_file1"] == 1
+        assert alignment.differences_mask.iloc[1].tolist() == [True, False]
+
+    def test_many_wide_columns_overflow_the_packed_key(self) -> None:
+        # 7 columns × 1000 distinct values: 10^21 combinations do not fit in
+        # int64, so the packed key is renumbered on the way.
+        rng = np.random.default_rng(3)
+        base = pd.DataFrame({f"c{i}": rng.permutation(1000) for i in range(7)})
+        file2 = base.sample(frac=1, random_state=4).reset_index(drop=True)
+        file2.loc[10, "c6"] = -1
+        alignment = align_unordered(base, file2, list(base.columns))
+        match = alignment.row_match
+        assert match["equal"] == 999
+        assert match["similar"] == 1
+        assert alignment.differences_mask.sum().sum() == 1
+
+    def test_mixed_types_in_a_column_use_canonical_values(self) -> None:
+        # A column with numbers in one file and dates in the other is coded
+        # from canonical values: the midnight date equals its ISO string.
+        file1 = _rows(day=[datetime(2026, 9, 1), datetime(2026, 9, 2)], n=[1, 2])
+        file2 = _rows(day=["2026-09-02", "2026-09-01"], n=[2.0, 1.0])
+        assert align_unordered(file1, file2, ["day", "n"]).row_match["identical"] is True
+
+
 class TestEmpty:
     def test_both_empty(self) -> None:
         df = pd.DataFrame({"a": []})

@@ -137,6 +137,19 @@ class TestFormatterBenchmarks:
         formatter = ExcelOutputFormatter()
         benchmark(formatter.format, result, tmp_path / "out.xlsx")
 
+    def test_excel_format_100k_rows_full_sheets(
+        self, benchmark, unordered_df_pair: tuple[pd.DataFrame, pd.DataFrame], tmp_path: Path
+    ) -> None:
+        # 100 000 rows is DATA_SHEETS_MAX_ROWS: the largest report that gets
+        # the full data sheets on its own (2 × 100 000 × 7 cells).
+        df1, df2 = (df.iloc[:100_000] for df in unordered_df_pair)
+        result = AdvancedComparator().compare(df1, df2, ignore_row_order=True)
+        formatter = ExcelOutputFormatter()
+        benchmark.pedantic(
+            formatter.format, args=(result, tmp_path / "out.xlsx"), rounds=1, iterations=1
+        )
+        assert (tmp_path / "out.xlsx").stat().st_size > 0
+
     def test_html_format_10k_rows(
         self,
         benchmark,

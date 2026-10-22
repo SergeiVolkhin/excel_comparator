@@ -3,6 +3,8 @@
 """
 
 import logging
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +30,15 @@ from .interfaces import (
     IProgressReporter,
     IValidationRule,
 )
+
+#: Общий прогресс по этапам (проценты в конце этапа): загрузка обоих файлов,
+#: начало сравнения, сравнение готово, отчёт записан. Между PROGRESS_COMPARED
+#: и PROGRESS_REPORTED движется отметка записи отчёта (обратный вызов
+#: форматтера), 100 — всё готово.
+PROGRESS_LOADED = 40
+PROGRESS_COMPARING = 42
+PROGRESS_COMPARED = 55
+PROGRESS_REPORTED = 99
 
 
 class ComparisonEngine:
@@ -122,26 +133,31 @@ class ComparisonEngine:
     ) -> ComparisonResult:
         """Выполняет полное сравнение файлов"""
         try:
-            self._report(progress_reporter, 0, "Начало сравнения...")
+            self._report(progress_reporter, 0, "Загрузка файлов…")
 
             if formatter_name is None:
                 formatter_name = self._determine_formatter(output_path)
                 self.logger.info(f"Автоматически выбран форматтер: {formatter_name}")
 
-            df1, df2 = self._load_pair(file1_path, file2_path, options)
+            df1, df2 = self._load_pair(file1_path, file2_path, options, progress_reporter)
             load_info = self._check_loaded_pair(df1, df2)
-            self._report(progress_reporter, 20, "Файлы загружены")
 
             self._validate_data(df1, df2)
-            self._report(progress_reporter, 30, "Валидация выполнена")
+            self._report(progress_reporter, PROGRESS_COMPARING, "Сравнение данных…")
 
             result = self._run_comparison(df1, df2, comparator_name, options)
             if load_info:
                 result.metadata.setdefault("load_info", load_info)
-            self._report(progress_reporter, 70, "Сравнение выполнено")
+            self._report(progress_reporter, PROGRESS_COMPARED, "Сравнение выполнено")
 
             self._run_formatter(
-                result, output_path, formatter_name, file1_path, file2_path, options
+                result,
+                output_path,
+                formatter_name,
+                file1_path,
+                file2_path,
+                options,
+                self._stage_progress(progress_reporter, PROGRESS_COMPARED, PROGRESS_REPORTED),
             )
             self._report(progress_reporter, 100, "Сравнение завершено")
             if progress_reporter:
@@ -162,16 +178,55 @@ class ComparisonEngine:
         if reporter:
             reporter.report_progress(percent, 100, message)
 
+    def _stage_progress(
+        self, reporter: IProgressReporter | None, start: int, end: int
+    ) -> Callable[[float, str], None] | None:
+        """Обратный вызов для этапа: доля 0..1 → проценты ``start``..``end``.
+
+        Повтор того же процента с тем же текстом не отправляется, чтобы не
+        засорять очередь событий окна.
+        """
+        if reporter is None:
+            return None
+        last: list[tuple[int, str]] = []
+
+        def report(share: float, message: str) -> None:
+            percent = start + int((end - start) * min(max(share, 0.0), 1.0))
+            if last and last[0] == (percent, message):
+                return
+            last[:] = [(percent, message)]
+            self._report(reporter, percent, message)
+
+        return report
+
     def _load_pair(
-        self, file1_path: Path, file2_path: Path, options: dict[str, Any]
+        self,
+        file1_path: Path,
+        file2_path: Path,
+        options: dict[str, Any],
+        reporter: IProgressReporter | None = None,
     ) -> tuple["pd.DataFrame", "pd.DataFrame"]:
+        """Загружает оба файла одновременно.
+
+        calamine разбирает xlsx в Rust, отпуская GIL, поэтому два потока
+        читают пару файлов примерно на четверть быстрее, чем по очереди.
+        """
         self.logger.info(f"Загрузка файлов: {file1_path.name} и {file2_path.name}")
         loader_options = options.get("loader_options", {})
         loader1 = self._find_file_loader(file1_path)
         loader2 = self._find_file_loader(file2_path)
-        df1 = loader1.load(file1_path, **loader_options)
-        df2 = loader2.load(file2_path, **loader_options)
-        return df1, df2
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="load") as pool:
+            future1 = pool.submit(loader1.load, file1_path, **loader_options)
+            future2 = pool.submit(loader2.load, file2_path, **loader_options)
+            names = {future1: file1_path.name, future2: file2_path.name}
+            for loaded, future in enumerate(as_completed(names), start=1):
+                future.result()  # ошибка загрузки — сразу, не дожидаясь второго файла
+                self._report(
+                    reporter,
+                    PROGRESS_LOADED * loaded // 2,
+                    f"Загружен «{names[future]}» ({loaded} из 2)",
+                )
+        return future1.result(), future2.result()
 
     def _check_loaded_pair(self, df1: "pd.DataFrame", df2: "pd.DataFrame") -> dict[str, Any]:
         """Сверяет форму загруженных таблиц и логирует расхождения.
@@ -228,6 +283,7 @@ class ComparisonEngine:
         file1_path: Path,
         file2_path: Path,
         options: dict[str, Any],
+        progress: Callable[[float, str], None] | None = None,
     ) -> None:
         formatter = self._get_formatter(formatter_name)
         format_options: dict[str, Any] = dict(options.get("format_options", {}))
@@ -235,6 +291,8 @@ class ComparisonEngine:
         format_options.setdefault(
             "first_data_row", self._first_data_row(options.get("loader_options", {}))
         )
+        if progress is not None:
+            format_options.setdefault("progress", progress)
         formatter.format(result, output_path, **format_options)
 
     @staticmethod

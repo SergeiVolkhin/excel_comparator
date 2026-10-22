@@ -220,10 +220,12 @@ class MainWindow:
         self.ignore_case_var = tk.BooleanVar(value=settings.ignore_case)
         self.ignore_whitespace_var = tk.BooleanVar(value=settings.ignore_whitespace)
         self.skip_bad_lines_var = tk.BooleanVar(value=False)
+        self.full_data_sheets_var = tk.BooleanVar(value=settings.full_data_sheets)
         items = [
             ("Игнорировать регистр", self.ignore_case_var, 0, 0),
             ("Игнорировать пробелы по краям", self.ignore_whitespace_var, 0, 1),
             ("Пропускать повреждённые строки CSV", self.skip_bad_lines_var, 1, 0),
+            ("Полные листы данных для больших файлов", self.full_data_sheets_var, 1, 1),
         ]
         for text, variable, row, column in items:
             check = ttk.Checkbutton(checks, text=text, variable=variable)
@@ -414,6 +416,10 @@ class MainWindow:
             "• Ключевые столбцы, например dt, idUser: строки сопоставляются по ним,\n"
             "  а отличия в остальных столбцах подсвечиваются в отчёте.\n"
             "• Игнорировать регистр и пробелы, пропускать повреждённые строки CSV.\n"
+            "• Полные листы данных для больших файлов: до 100 000 строк копии обоих\n"
+            "  файлов с подсветкой есть в отчёте всегда, больше — только с этой\n"
+            "  галочкой (запись заметно дольше). Все отличия всегда на листе\n"
+            "  «Расхождения».\n"
             "• Куда сохранить отчёт. По умолчанию рядом с первым файлом; старые\n"
             "  отчёты не перезаписываются: «Сравнение (2).xlsx», «Сравнение (3).xlsx»…",
             parent=self.root,
@@ -438,6 +444,7 @@ class MainWindow:
             "comparator_name": "advanced",
             "comparison_options": comparison,
             "loader_options": loader,
+            "format_options": {"full_data_sheets": self.full_data_sheets_var.get()},
         }
 
     def _remember_options(self) -> None:
@@ -446,6 +453,7 @@ class MainWindow:
         settings.ignore_whitespace = self.ignore_whitespace_var.get()
         settings.ignore_row_order = self.ignore_row_order_var.get()
         settings.key_columns = parse_key_columns(self.key_columns_var.get())
+        settings.full_data_sheets = self.full_data_sheets_var.get()
 
     def _compare_in_background(
         self,

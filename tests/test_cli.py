@@ -97,6 +97,12 @@ class TestArgumentParsing:
         assert args.ignore_row_order is True
         assert args.key_columns == "dt,idUser"
 
+    def test_full_data_sheets_flag(self, patch_argv: Any) -> None:
+        patch_argv(["--cli"])
+        assert cli_main.parse_arguments().full_data_sheets is False
+        patch_argv(["--cli", "--full-data-sheets"])
+        assert cli_main.parse_arguments().full_data_sheets is True
+
 
 class TestRunCLIMode:
     """End-to-end: small CSV pair → CSV report via run_cli_mode."""
@@ -114,6 +120,7 @@ class TestRunCLIMode:
             ignore_whitespace=False,
             ignore_row_order=False,
             key_columns=None,
+            full_data_sheets=False,
             format=None,
             csv_encoding=None,
             csv_delimiter=None,

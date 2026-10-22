@@ -93,6 +93,15 @@ def parse_arguments():
     )
 
     parser.add_argument(
+        "--full-data-sheets",
+        action="store_true",
+        help=(
+            "Полные листы данных в Excel-отчёте и для таблиц больше 100 000 строк "
+            "(до порога они пишутся всегда)."
+        ),
+    )
+
+    parser.add_argument(
         "--format",
         type=str,
         choices=["xlsx", "html", "csv"],
@@ -283,9 +292,15 @@ def run_cli_mode(args):
     progress_reporter = ProgressReporter()
 
     class CLIProgressObserver:
+        _width = 0
+
         def on_progress(self, current, total, message=""):
             percent = (current / total) * 100 if total > 0 else 0
-            print(f"\rПрогресс: [{current}/{total}] {percent:.1f}% {message}", end="")
+            line = f"Прогресс: [{current}/{total}] {percent:.1f}% {message}"
+            # \r возвращает каретку, но не стирает строку: добиваем пробелами
+            # до длины предыдущей, иначе от длинного текста остаётся хвост
+            print(f"\r{line.ljust(self._width)}", end="", flush=True)
+            self._width = len(line)
 
         def on_error(self, error):
             print(f"\nОшибка: {error}")
@@ -322,6 +337,7 @@ def run_cli_mode(args):
         options = {
             "comparison_options": comparison_options,
             "loader_options": _build_loader_options(args),
+            "format_options": {"full_data_sheets": args.full_data_sheets},
             "formatter_name": formatter_name,
             "file1_name": file1_path.name,
             "file2_name": file2_path.name,

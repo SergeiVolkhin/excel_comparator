@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import gc
 import logging
+import tempfile
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -11,6 +15,7 @@ from openpyxl import load_workbook
 
 from src.comparators.advanced_comparator import AdvancedComparator
 from src.comparators.basic_comparator import BasicComparator
+from src.core.exceptions import ApplicationError
 from src.core.interfaces import ComparisonResult
 from src.formatters import excel_formatter
 from src.formatters.excel_formatter import (
@@ -223,7 +228,8 @@ class TestDifferencesSheet:
         try:
             sheet = wb["Расхождения"]
             for row in (2, 3):  # both lines of the pair
-                assert sheet.cell(row=row, column=6).fill.fgColor.rgb == "00FFFF00"  # sum
+                # ARGB; the alpha byte differs between writers, the colour must not
+                assert sheet.cell(row=row, column=6).fill.fgColor.rgb[-6:] == "FFFF00"  # sum
                 assert sheet.cell(row=row, column=5).fill.fill_type is None  # id
             assert sheet.cell(row=4, column=6).fill.fill_type is None  # only in file 2
             assert sheet.freeze_panes == "A2"
@@ -305,3 +311,139 @@ class TestDifferencesSheet:
         content = out.read_text(encoding="utf-8")
         assert "Изменённые строки (пара найдена)" in content
         assert "из них по сходству" in content
+
+
+class TestReportWriting:
+    """XlsxWriter-based writing: thresholds, progress, names, cell types."""
+
+    @staticmethod
+    def _sheets(path: Path) -> list[str]:
+        wb = load_workbook(path, read_only=True)
+        try:
+            return list(wb.sheetnames)
+        finally:
+            wb.close()
+
+    def test_large_table_skips_full_data_sheets(
+        self,
+        simple_result: ComparisonResult,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(excel_formatter, "DATA_SHEETS_MAX_ROWS", 2)  # 3 rows > 2
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(simple_result, out, file1_name="A", file2_name="B")
+        assert self._sheets(out) == ["Сводка", "Расхождения"]
+        labels = {row[0]: row[1] for row in _sheet_rows(out, "Сводка") if row and row[0]}
+        assert str(labels["Полные листы данных:"]).startswith("не записаны: 3 строк больше 2")
+        # The differences sheet still lists the changed row
+        assert _sheet_rows(out, "Расхождения")[1][-1] == "name: b → B"
+
+    def test_full_data_sheets_option_forces_them(
+        self,
+        simple_result: ComparisonResult,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(excel_formatter, "DATA_SHEETS_MAX_ROWS", 2)
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(
+            simple_result, out, file1_name="A", file2_name="B", full_data_sheets=True
+        )
+        assert self._sheets(out) == ["Сводка", "Расхождения", "A", "B"]
+        labels = {row[0] for row in _sheet_rows(out, "Сводка") if row and row[0]}
+        assert "Полные листы данных:" not in labels
+
+    def test_progress_goes_forward_to_the_end(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(excel_formatter, "PROGRESS_CHUNK_ROWS", 2)
+        df1 = pd.DataFrame({"id": range(7), "v": range(7)})
+        df2 = df1.assign(v=[0, 1, 2, 30, 4, 5, 60])
+        calls: list[tuple[float, str]] = []
+        ExcelOutputFormatter().format(
+            BasicComparator().compare(df1, df2),
+            tmp_path / "r.xlsx",
+            progress=lambda share, message: calls.append((share, message)),
+        )
+        shares = [share for share, _ in calls]
+        assert shares == sorted(shares)
+        assert shares[-1] == 1.0
+        assert len(calls) > 4  # row chunks of the sheets, not just start and end
+        assert any("из 7 строк" in message for _, message in calls)
+
+    @pytest.mark.parametrize(
+        ("name1", "name2", "expected"),
+        [
+            ("data", "data", ["data", "data (2)"]),
+            ("DATA", "data", ["DATA", "data (2)"]),
+            ("a[1]:b", "c*?/d", ["a_1__b", "c___d"]),
+            ("Сводка", "Расхождения", ["Сводка (2)", "Расхождения (2)"]),
+            ("x" * 40, "x" * 40, ["x" * 30, "x" * 26 + " (2)"]),
+        ],
+    )
+    def test_sheet_names_are_valid_and_unique(
+        self,
+        simple_result: ComparisonResult,
+        tmp_path: Path,
+        name1: str,
+        name2: str,
+        expected: list[str],
+    ) -> None:
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(simple_result, out, file1_name=name1, file2_name=name2)
+        assert self._sheets(out)[2:] == expected
+
+    def test_cell_values_keep_their_type(self, tmp_path: Path) -> None:
+        df = pd.DataFrame(
+            {
+                "text": ["=1+1", "http://example.com"],
+                "day": pd.to_datetime(["2026-09-01", "2026-09-02"]),
+                "moment": pd.to_datetime(["2026-09-01 12:30", None]),
+                "n": [1.5, None],
+            }
+        )
+        out = tmp_path / "r.xlsx"
+        ExcelOutputFormatter().format(BasicComparator().compare(df, df.copy()), out)
+        wb = load_workbook(out)
+        try:
+            sheet = wb["Файл 1"]
+            assert sheet["A2"].value == "=1+1"  # text, not a formula
+            assert sheet["A2"].data_type == "s"
+            assert sheet["A3"].value == "http://example.com"
+            assert sheet["A3"].hyperlink is None
+            assert sheet["B2"].value == datetime(2026, 9, 1)
+            assert sheet["B2"].number_format == "yyyy-mm-dd"
+            assert sheet["C2"].number_format == "yyyy-mm-dd hh:mm:ss"
+            assert sheet["C3"].value is None  # NaT
+            assert sheet["D3"].value is None  # NaN
+        finally:
+            wb.close()
+
+    def test_failure_leaves_no_half_written_report(
+        self,
+        simple_result: ComparisonResult,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("disk full")
+
+        temp_files: list[str] = []
+        real_mkstemp = tempfile.mkstemp
+
+        def recording_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+            descriptor, name = real_mkstemp(*args, **kwargs)
+            temp_files.append(name)
+            return descriptor, name
+
+        monkeypatch.setattr(tempfile, "mkstemp", recording_mkstemp)
+        monkeypatch.setattr(ExcelOutputFormatter, "_write_differences_sheet", boom)
+        out = tmp_path / "r.xlsx"
+        with pytest.raises(ApplicationError, match="disk full"):
+            ExcelOutputFormatter().format(simple_result, out)
+        gc.collect()  # XlsxWriter would close (and write) the workbook here
+        assert not out.exists()
+        # constant_memory row files of the sheets written so far are gone too
+        assert temp_files
+        assert not any(Path(name).exists() for name in temp_files)

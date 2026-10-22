@@ -12,7 +12,16 @@ from openpyxl import load_workbook
 from ..core.exceptions import FileLoadError
 from ..core.interfaces import IFileLoader
 
-ExcelEngine = Literal["openpyxl", "xlrd"]
+try:
+    # Rust-читатель xlsx/xls: в 5–7 раз быстрее openpyxl при тех же типах
+    # (вывод типов делает pandas). Явный импорт ещё и для PyInstaller.
+    import python_calamine  # noqa: F401
+
+    CALAMINE_AVAILABLE = True
+except ImportError:  # pragma: no cover - зависит от окружения
+    CALAMINE_AVAILABLE = False
+
+ExcelEngine = Literal["calamine", "openpyxl", "xlrd"]
 
 
 class ExcelFileLoader(IFileLoader):
@@ -36,6 +45,11 @@ class ExcelFileLoader(IFileLoader):
             read_only: bool — bypass pandas for large xlsx files, reading
                 via openpyxl streaming mode (default False). Significantly
                 reduces memory usage for multi-MB files at a small CPU cost.
+
+        By default the file is read by ``pd.read_excel`` with the calamine
+        engine when python-calamine is installed (5–7× faster than openpyxl;
+        pandas infers the column types either way, so the frames are the
+        same), otherwise with openpyxl (.xlsx) or xlrd (.xls).
         """
         if not file_path.exists():
             raise FileLoadError(str(file_path), "Файл не существует")
@@ -56,7 +70,7 @@ class ExcelFileLoader(IFileLoader):
             if read_only and file_path.suffix.lower() == ".xlsx":
                 df = self._load_xlsx_readonly(file_path, sheet_name, header)
             else:
-                engine: ExcelEngine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
+                engine = self._engine_for(file_path)
                 df = cast(
                     pd.DataFrame,
                     pd.read_excel(
@@ -81,6 +95,13 @@ class ExcelFileLoader(IFileLoader):
         except Exception as e:
             self.logger.error(f"Ошибка загрузки файла {file_path}: {e}")
             raise FileLoadError(str(file_path), str(e)) from e
+
+    @staticmethod
+    def _engine_for(file_path: Path) -> ExcelEngine:
+        """Движок pandas: calamine, если установлен, иначе openpyxl / xlrd."""
+        if CALAMINE_AVAILABLE:
+            return "calamine"
+        return "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
 
     @staticmethod
     def _load_xlsx_readonly(file_path: Path, sheet_name: int | str, header: int) -> pd.DataFrame:
@@ -126,8 +147,7 @@ class ExcelFileLoader(IFileLoader):
     def preview_data(self, file_path: Path, max_rows: int = 5) -> pd.DataFrame:
         """Предварительный просмотр данных из файла"""
         try:
-            engine: ExcelEngine = "openpyxl" if file_path.suffix.lower() == ".xlsx" else "xlrd"
-            return pd.read_excel(file_path, nrows=max_rows, engine=engine)
+            return pd.read_excel(file_path, nrows=max_rows, engine=self._engine_for(file_path))
         except Exception as e:
             self.logger.error(f"Ошибка предварительного просмотра {file_path}: {e}")
             return pd.DataFrame()

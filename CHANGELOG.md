@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Large files: about 12× faster end to end.** Two exports of 380 598 ×
+  9 (16 MB xlsx each), ignoring row order: 145 s → ≈ 12 s.
+  - xlsx/xls are read with python-calamine (`pd.read_excel(engine=
+    "calamine")`, 5–7× faster than openpyxl; pandas still infers the
+    column types, so the frames are identical — pinned by a test). openpyxl
+    stays the fallback when calamine is not installed.
+  - Both files load concurrently (`ThreadPoolExecutor`, calamine parses
+    without the GIL): about 26 % off the load stage.
+  - Full data sheets are written up to `DATA_SHEETS_MAX_ROWS` = 100 000
+    rows; above that the report is «Сводка» + «Расхождения» and the
+    summary says why. GUI checkbox «Полные листы данных для больших
+    файлов», CLI `--full-data-sheets`, `ComparisonSettings.full_data_sheets`
+    force them.
+  - Row matching runs on integer value codes (`_Codes` in
+    `row_matching.py`): per-column `factorize` (raw values for plain numpy
+    and text columns, canonical values otherwise), row keys packed as
+    mixed-radix numbers, duplicates paired via (group, occurrence) and an
+    index lookup, cell differences by comparing codes. Same semantics, all
+    existing tests unchanged; 200 000 rows: 1.3 s → 0.65 s.
+- **Progress that moves.** The engine reports each loaded file (20 / 40 %),
+  the comparison (42–55 %) and the report writing in steps of 10 000 rows
+  (55–99 %, through a `progress(share, message)` callback in the formatter
+  options) instead of 0/20/30/70/100 with the whole report written after
+  «70 % Сравнение выполнено». The CLI progress line no longer leaves
+  remnants of a longer previous message.
 - **Changed rows are found without key columns.** With
   `ignore_row_order` and no `key_columns`, the rows left without an
   identical row get a second, similarity pass (`_pair_similar_rows` in
@@ -28,9 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Excel: «Расхождения» sheet with only the rows that differ. A changed
   row takes two lines (file 1 and file 2) with the changed cells
   highlighted, the source row number in each file and a «Что изменилось»
-  column such as `Sum_in_from_sum_out: 1000 → 100 (-900)`. The sheet is
-  capped at 50 000 differences. The engine passes `first_data_row` to the
-  formatter (header row and CSV `skiprows` taken into account).
+  column such as `Sum_in_from_sum_out: 1000 → 100 (-900)`. The sheet
+  lists every difference that fits into one Excel sheet. The engine passes
+  `first_data_row` to the formatter (header row and CSV `skiprows` taken
+  into account).
 - Numeric differences are described with their delta, file 2 − file 1,
   computed in `Decimal` (`2414.45 → 2414.5 (+0.05)`).
 
@@ -90,6 +116,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   отличия» → «Изменённые строки (пара найдена)», plus «из них по сходству»
   in the Excel summary, the HTML cards, the CLI printout and the GUI
   banner.
+- `ExcelOutputFormatter` writes with XlsxWriter (`constant_memory`) instead
+  of openpyxl: rows stream to temp files, so memory stays flat and the
+  progress can follow the writing; about 2–3× faster per cell. Text stays
+  text (`strings_to_formulas` / `strings_to_urls` off), datetime columns
+  without times get `yyyy-mm-dd`, NaN/NaT are empty cells. Sheet names are
+  sanitised (`[]:*?/\`) and made unique, so two files with the same name
+  (`data.xlsx` from two folders) no longer clash. A failed write leaves
+  neither a half-written report nor XlsxWriter's temp files.
+- Differences are described via `BasicDifferenceAnalyzer.describe()` (the
+  same text as `analyze()`, without building a `DifferenceDetail`), once
+  per row for both the data sheets and «Расхождения».
+- `_column_totals` sums through `tolist()` instead of a per-element
+  generator (same exact `math.fsum` / integer result).
+- New dependencies: `python-calamine>=0.4,<1`, `XlsxWriter>=3.2,<4`.
 
 ### Removed
 
@@ -117,6 +157,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer turns 57.3 into 57.29).
 - Whole numbers that arrive as floats are described without `.0`
   (`998702019`, not `998702019.0`).
+- A positional comparison of two large files with millions of differing
+  cells (380 598 rows, 1.76 million cells) did not finish in 35 minutes
+  and used 3 GB of memory while openpyxl styled every cell; it now takes
+  about 2 minutes with flat memory.
 
 ## [0.2.0] - 2026-04-16
 

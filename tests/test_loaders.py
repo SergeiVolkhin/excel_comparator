@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import pandas as pd
 import pytest
 
 from src.core.exceptions import FileLoadError
+from src.loaders import excel_loader as excel_module
 from src.loaders.csv_loader import CSVFileLoader
 from src.loaders.excel_loader import ExcelFileLoader
 
@@ -94,6 +96,63 @@ class TestExcelLoaderLoad:
             empty.to_excel(w, index=False)
         with pytest.raises(FileLoadError):
             excel_loader.load(p)
+
+
+def _write_typed_xlsx(path: Path) -> Path:
+    """xlsx with the cell types that differ between readers."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["id_text", "amount", "count", "when", "mixed", "flag", "note"])
+    # A number stored as text, as some exports write ids
+    ws.append(["998702019", 1100.5, 3, datetime(2026, 9, 1), 5, True, None])
+    ws.append(["998702020", 0, 4, datetime(2026, 9, 2, 12, 30), "x", False, "text"])
+    ws.append(["998702021", None, None, None, None, None, None])
+    wb.save(path)
+    return path
+
+
+class TestExcelLoaderEngines:
+    """calamine reads xlsx 5–7× faster; the frames must not change."""
+
+    @pytest.fixture
+    def read_excel_engines(self, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+        engines: list[Any] = []
+        real = excel_module.pd.read_excel
+
+        def spy(*args: Any, **kwargs: Any) -> Any:
+            engines.append(kwargs.get("engine"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(excel_module.pd, "read_excel", spy)
+        return engines
+
+    def test_calamine_frame_equals_openpyxl_frame(
+        self, excel_loader: ExcelFileLoader, tmp_path: Path
+    ) -> None:
+        path = _write_typed_xlsx(tmp_path / "typed.xlsx")
+        loaded = excel_loader.load(path)
+        pd.testing.assert_frame_equal(loaded, pd.read_excel(path, engine="openpyxl"))
+        # The text-number column is inferred as integers by both readers
+        assert loaded["id_text"].dtype == "int64"
+
+    def test_calamine_is_used_when_installed(
+        self, excel_loader: ExcelFileLoader, tmp_path: Path, read_excel_engines: list[Any]
+    ) -> None:
+        excel_loader.load(_write_typed_xlsx(tmp_path / "typed.xlsx"))
+        assert read_excel_engines == ["calamine"]
+
+    def test_openpyxl_without_calamine(
+        self,
+        excel_loader: ExcelFileLoader,
+        tmp_path: Path,
+        read_excel_engines: list[Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(excel_module, "CALAMINE_AVAILABLE", False)
+        excel_loader.load(_write_typed_xlsx(tmp_path / "typed.xlsx"))
+        assert read_excel_engines == ["openpyxl"]
 
 
 # ---------------------------------------------------------------------------

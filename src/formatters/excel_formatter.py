@@ -1,18 +1,31 @@
 """
 Форматтер для вывода результатов в Excel
+
+Отчёт пишется потоково через XlsxWriter (``constant_memory``): строки уходят
+во временные файлы по мере записи, поэтому память не растёт с размером
+таблицы, а ход записи можно показывать по кускам. Листы: «Сводка»,
+«Расхождения» (только строки с отличиями) и две полные копии данных с
+подсветкой — для таблиц до ``DATA_SHEETS_MAX_ROWS`` строк или по опции
+``full_data_sheets``.
 """
 
+from __future__ import annotations
+
+import contextlib
+import itertools
 import logging
+import os
+import re
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
-from openpyxl import Workbook
-from openpyxl.cell.cell import MergedCell
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.utils.dataframe import dataframe_to_rows
+import xlsxwriter
 
 from ..analyzers.list_analyzer import BasicDifferenceAnalyzer, ListDifferenceAnalyzer
 from ..comparators.row_matching import (
@@ -26,6 +39,11 @@ from ..comparators.row_matching import (
 from ..core.exceptions import ApplicationError
 from ..core.interfaces import ComparisonResult, IDifferenceAnalyzer, IOutputFormatter
 from ..core.result_summary import floor_percentage
+
+IntArray = npt.NDArray[np.intp]
+
+#: Report progress callback: share of the report written (0..1) and a message.
+ProgressCallback = Callable[[float, str], None]
 
 #: Excel spec caps sheet names at 31 chars; we stay one under to avoid
 #: silent truncation on append when duplicate-suffix resolution kicks in.
@@ -42,19 +60,32 @@ HEADER_FILL_COLOR: str = "E6E6FA"
 #: constant rather than O(rows × cols) on large tables.
 COLUMN_WIDTH_SAMPLE_ROWS: int = 200
 
-#: Above this row count an Excel report is slow to build; we log a warning
-#: suggesting the HTML formatter (which paginates) for large tables.
+#: Above this row count full data sheets take a while to write; we log a
+#: warning suggesting the HTML formatter (which paginates) for large tables.
 EXCEL_LARGE_ROW_THRESHOLD: int = 20_000
 
-#: Sheet that lists only the rows with differences.
+#: Full data sheets are written on their own up to this many rows. Above it
+#: two full copies of the data are most of the report's time and size, and
+#: the differences sheet already lists every changed row.
+DATA_SHEETS_MAX_ROWS: int = 100_000
+
+#: Rows in one Excel sheet, the header included.
+EXCEL_MAX_ROWS: int = 1_048_576
+
+#: Sheet names used by the report itself.
+SUMMARY_SHEET_NAME: str = "Сводка"
 DIFFERENCES_SHEET_NAME: str = "Расхождения"
 
-#: The differences sheet lists at most this many discrepancies (a changed
-#: row takes two lines); all of them stay marked on the data sheets.
-DIFFERENCES_SHEET_MAX_ITEMS: int = 50_000
+#: The differences sheet lists at most this many discrepancies. A changed row
+#: takes two lines, and the lines must fit into one sheet together with the
+#: header and a note, so the real limit may be lower (see ``_plan_items``).
+DIFFERENCES_SHEET_MAX_ITEMS: int = EXCEL_MAX_ROWS - 2
 
 #: Columns in front of the data columns on the differences sheet.
 DIFFERENCES_LEAD_COLUMNS: list[str] = ["№", "Статус", "Файл", "Строка в файле"]
+
+#: Rows written between two progress updates.
+PROGRESS_CHUNK_ROWS: int = 10_000
 
 #: Row status → label on the differences sheet ("modified" also has a
 #: "by key" variant, see ``_status_label``).
@@ -71,6 +102,100 @@ SIMILARITY_NOTE: str = (
     "сопоставления задайте ключевые столбцы — те, что однозначно определяют строку."
 )
 
+#: Number formats of date cells: a column without times shows dates only.
+DATE_FORMAT: str = "yyyy-mm-dd"
+DATETIME_FORMAT: str = "yyyy-mm-dd hh:mm:ss"
+
+#: XlsxWriter options: rows stream to disk, text always stays text (a value
+#: like "=A1" or "http://…" must not turn into a formula or a link).
+WORKBOOK_OPTIONS: dict[str, Any] = {
+    "constant_memory": True,
+    "strings_to_formulas": False,
+    "strings_to_urls": False,
+    "nan_inf_to_errors": True,
+    "remove_timezone": True,
+    "default_date_format": DATETIME_FORMAT,
+}
+
+#: Characters Excel does not allow in sheet names.
+_INVALID_SHEET_NAME_CHARS = re.compile(r"[\[\]:*?/\\]")
+
+#: Share of the progress taken by writing rows; the rest is saving the file.
+_ROWS_SHARE = 0.97
+
+_PAIRED = (STATUS_MODIFIED, STATUS_SIMILAR)
+_ONLY = (STATUS_ONLY_FILE1, STATUS_ONLY_FILE2)
+_NO_COLUMNS: IntArray = np.empty(0, dtype=np.intp)
+
+
+@dataclass(frozen=True)
+class _Formats:
+    """Cell formats of one workbook (XlsxWriter formats belong to a workbook)."""
+
+    header: Any
+    highlight: Any
+    title: Any
+    section: Any
+    bold: Any
+    bordered: Any
+    date: Any
+    datetime: Any
+    highlight_date: Any
+    highlight_datetime: Any
+
+    @classmethod
+    def create(cls, workbook: Any, highlight_color: str) -> _Formats:
+        highlight = {"bg_color": f"#{highlight_color}", "border": 1}
+        return cls(
+            header=workbook.add_format(
+                {
+                    "bold": True,
+                    "font_size": 12,
+                    "bg_color": f"#{HEADER_FILL_COLOR}",
+                    "align": "center",
+                    "valign": "vcenter",
+                    "border": 1,
+                }
+            ),
+            highlight=workbook.add_format(highlight),
+            title=workbook.add_format(
+                {"bold": True, "font_size": 16, "align": "center", "valign": "vcenter"}
+            ),
+            section=workbook.add_format({"bold": True, "font_size": 14}),
+            bold=workbook.add_format({"bold": True}),
+            bordered=workbook.add_format({"border": 1}),
+            date=workbook.add_format({"num_format": DATE_FORMAT}),
+            datetime=workbook.add_format({"num_format": DATETIME_FORMAT}),
+            highlight_date=workbook.add_format({**highlight, "num_format": DATE_FORMAT}),
+            highlight_datetime=workbook.add_format({**highlight, "num_format": DATETIME_FORMAT}),
+        )
+
+
+class _Progress:
+    """Turns rows written into a share of the report for the callback."""
+
+    def __init__(self, callback: ProgressCallback | None, total_rows: int) -> None:
+        self._callback = callback
+        self._total = max(total_rows, 1)
+        self._done = 0
+
+    def rows(self, count: int, message: str) -> None:
+        self._done += count
+        self.share(min(self._done / self._total, 1.0) * _ROWS_SHARE, message)
+
+    def share(self, value: float, message: str) -> None:
+        if self._callback is not None:
+            self._callback(value, message)
+
+
+@dataclass(frozen=True)
+class _DifferencesPlan:
+    """Which discrepancies the differences sheet shows and how many lines."""
+
+    items: IntArray  # aligned row positions, in report order
+    lines: int
+    total: int  # all discrepancies, shown or not
+
 
 class ExcelOutputFormatter(IOutputFormatter):
     """Форматтер для вывода результатов сравнения в Excel"""
@@ -81,33 +206,10 @@ class ExcelOutputFormatter(IOutputFormatter):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.config = config
 
-        # Настройки стилей
-        highlight_color = (
+        self.highlight_color = (
             getattr(config.comparison, "highlight_color", DEFAULT_HIGHLIGHT_COLOR)
             if config
             else DEFAULT_HIGHLIGHT_COLOR
-        )
-        self.highlight_fill = PatternFill(
-            start_color=highlight_color,
-            end_color=highlight_color,
-            fill_type="solid",
-        )
-
-        self.header_fill = PatternFill(
-            start_color=HEADER_FILL_COLOR,
-            end_color=HEADER_FILL_COLOR,
-            fill_type="solid",
-        )
-
-        self.header_font = Font(bold=True, size=12)
-        self.center_align = Alignment(horizontal="center", vertical="center")
-
-        # Границы
-        self.thin_border = Border(
-            left=Side(style="thin"),
-            right=Side(style="thin"),
-            top=Side(style="thin"),
-            bottom=Side(style="thin"),
         )
 
         # Анализаторы различий
@@ -119,38 +221,54 @@ class ExcelOutputFormatter(IOutputFormatter):
         ]
 
     def format(self, result: ComparisonResult, output_path: Path, **options: Any) -> None:
-        """Форматирует и сохраняет результат сравнения в Excel"""
+        """Форматирует и сохраняет результат сравнения в Excel.
+
+        Options:
+            file1_name, file2_name: имена листов с данными.
+            first_data_row: номер первой строки данных в исходных файлах.
+            full_data_sheets: писать полные листы данных при любом размере.
+            progress: ``callback(доля 0..1, сообщение)`` хода записи.
+        """
         try:
             self.logger.info(f"Создание Excel отчета: {output_path}")
+            row_pairs = self._row_pairs(result)
+            statuses = row_pairs["status"].to_numpy()
+            n_rows = len(result.file1_data)
+            with_data = bool(options.get("full_data_sheets")) or n_rows <= DATA_SHEETS_MAX_ROWS
 
             rows = result.metadata.get("shape", (0, 0))[0]
-            if rows > EXCEL_LARGE_ROW_THRESHOLD:
+            if with_data and rows > EXCEL_LARGE_ROW_THRESHOLD:
                 self.logger.warning(
-                    f"Большой объём данных ({rows} строк): формирование Excel-отчёта "
-                    f"может быть медленным. Для больших таблиц рассмотрите HTML-отчёт "
-                    f"(укажите расширение .html в имени выходного файла)."
+                    f"Большой объём данных ({rows} строк): полные листы данных пишутся "
+                    f"долго. Для больших таблиц рассмотрите HTML-отчёт (укажите "
+                    f"расширение .html в имени выходного файла)."
                 )
 
-            # Создаем рабочую книгу
-            workbook = Workbook()
+            plan = self._plan_items(statuses)
+            paired = np.isin(statuses, _PAIRED) & result.differences_mask.to_numpy(bool).any(1)
+            described = np.flatnonzero(paired) if with_data else plan.items[paired[plan.items]]
+            descriptions = self._describe_rows(result, described)
 
-            # Удаляем лист по умолчанию
-            workbook.remove(workbook.active)
-
-            row_pairs = self._row_pairs(result)
-
-            # Добавляем листы с данными
-            self._add_comparison_sheets(workbook, result, row_pairs, options)
-
-            # Лист только с расхождениями — вторым, сразу после сводки
-            self._add_differences_sheet(workbook, result, row_pairs, options)
-
-            # Добавляем лист со сводкой
-            self._add_summary_sheet(workbook, result)
-
-            # Сохраняем файл
-            workbook.save(output_path)
-
+            total_rows = plan.lines + (2 * n_rows if with_data else 0)
+            progress = _Progress(options.get("progress"), total_rows)
+            workbook = xlsxwriter.Workbook(_target(output_path), WORKBOOK_OPTIONS)
+            try:
+                formats = _Formats.create(workbook, self.highlight_color)
+                note = None if with_data else _data_sheets_note(n_rows)
+                self._write_summary_sheet(workbook, formats, result, note)
+                self._write_differences_sheet(
+                    workbook, formats, progress, result, row_pairs, plan, descriptions, options
+                )
+                if with_data:
+                    self._write_data_sheets(
+                        workbook, formats, progress, result, statuses, descriptions, options
+                    )
+                progress.share(0.98, "Отчёт: сохранение файла…")
+                workbook.close()
+            except BaseException:
+                _discard(workbook)
+                raise
+            progress.share(1.0, "Отчёт сохранён")
             self.logger.info(f"Excel отчет успешно создан: {output_path}")
 
         except Exception as e:
@@ -170,204 +288,50 @@ class ExcelOutputFormatter(IOutputFormatter):
             result.differences_mask, len(result.file1_data), len(result.file2_data)
         )
 
-    def _add_comparison_sheets(
-        self,
-        workbook: Workbook,
-        result: ComparisonResult,
-        row_pairs: pd.DataFrame,
-        options: dict[str, Any],
-    ) -> None:
-        """Добавляет листы с результатами сравнения"""
-        file1_name = options.get("file1_name", "Файл 1")
-        file2_name = options.get("file2_name", "Файл 2")
+    @staticmethod
+    def _plan_items(statuses: npt.NDArray[Any]) -> _DifferencesPlan:
+        """Расхождения для листа: сколько поместится в лист Excel."""
+        changed = np.flatnonzero(statuses != STATUS_EQUAL)
+        lines = np.cumsum(np.where(np.isin(statuses[changed], _PAIRED), 2, 1))
+        fits = int(np.searchsorted(lines, EXCEL_MAX_ROWS - 2, side="right"))
+        count = min(fits, DIFFERENCES_SHEET_MAX_ITEMS)
+        return _DifferencesPlan(
+            items=changed[:count],
+            lines=int(lines[count - 1]) if count else 0,
+            total=len(changed),
+        )
 
-        sheet1_name = file1_name[:SHEET_NAME_MAX_LEN]
-        sheet2_name = file2_name[:SHEET_NAME_MAX_LEN]
-
-        # Столбец с различиями — один на оба листа: «файл 1 → файл 2»
-        differences = self._create_differences_column(
-            result.file1_data, result.file2_data, result.differences_mask, row_pairs["status"]
-        ).to_numpy()
-
-        # Добавляем данные к DataFrame
-        result1_df = result.file1_data.copy()
-        result1_df["Различия"] = differences
-
-        result2_df = result.file2_data.copy()
-        result2_df["Различия"] = differences
-
-        # Создаем листы
-        self._create_data_sheet(workbook, sheet1_name, result1_df, result.differences_mask)
-        self._create_data_sheet(workbook, sheet2_name, result2_df, result.differences_mask)
-
-    def _create_data_sheet(
-        self, workbook: Workbook, sheet_name: str, data_df: pd.DataFrame, mask: pd.DataFrame
-    ) -> None:
-        """Создает лист с данными и применяет форматирование"""
-        worksheet = workbook.create_sheet(title=sheet_name)
-
-        # Добавляем данные. openpyxl не умеет писать pd.NA (в отличие от
-        # numpy.nan), а advanced-сравнение добивает короткую таблицу через
-        # reindex(fill_value=pd.NA). Поэтому NA меняем на None — пустую ячейку.
-        for row in dataframe_to_rows(data_df, index=False, header=True):
-            worksheet.append([None if pd.isna(v) else v for v in row])
-
-        self._style_header_row(worksheet)
-
-        # Применяем подсветку только к различающимся ячейкам.
-        # Векторизация: numpy.nonzero возвращает позиции диффов одним проходом,
-        # поэтому стоимость линейна от количества различий, а не от размера
-        # таблицы. Это критично для больших листов с редкими изменениями.
-        diff_rows, diff_cols = mask.values.nonzero()
-        for row_pos, col_idx in zip(diff_rows, diff_cols, strict=True):
-            cell = worksheet.cell(row=int(row_pos) + 2, column=int(col_idx) + 1)
-            cell.fill = self.highlight_fill
-            cell.border = self.thin_border
-
-        # Автоподбор ширины столбцов
-        self._auto_adjust_columns(worksheet)
-
-    def _style_header_row(self, worksheet: Any) -> None:
-        """Оформляет первую строку листа как заголовок таблицы."""
-        for cell in worksheet[1]:
-            cell.fill = self.header_fill
-            cell.font = self.header_font
-            cell.alignment = self.center_align
-            cell.border = self.thin_border
-
-    def _create_differences_column(
-        self,
-        file1_df: pd.DataFrame,
-        file2_df: pd.DataFrame,
-        mask: pd.DataFrame,
-        statuses: pd.Series,
-    ) -> pd.Series:
-        """Создает столбец с описанием различий: «столбец: файл 1 → файл 2».
-
-        Строка, которой нет в другом файле, подписывается целиком
-        («Только в файле 1»), а не перечислением «значение → NULL» по
-        каждой ячейке.
-
-        Iterates only over diff positions (via ``mask.values.nonzero``)
-        instead of the full ``rows × cols`` grid. For sparse differences
-        this is roughly O(diffs) vs the previous O(rows × cols).
-        """
-        cols = list(file1_df.columns)
-        values1 = file1_df.values
-        values2 = file2_df.values
-        status_values = statuses.to_numpy()
-        diff_rows, diff_cols = mask.values.nonzero()
-
-        by_row: dict[int, list[str]] = {}
-        for r, c in zip(diff_rows, diff_cols, strict=True):
-            if status_values[r] in (STATUS_ONLY_FILE1, STATUS_ONLY_FILE2):
-                continue
-            message = self._describe_change(cols[c], values1[r, c], values2[r, c])
-            by_row.setdefault(int(r), []).append(message)
-
-        descriptions = [
-            STATUS_LABELS[status_values[i]]
-            if status_values[i] in (STATUS_ONLY_FILE1, STATUS_ONLY_FILE2)
-            else " | ".join(by_row.get(i, []))
-            for i in range(len(file1_df))
-        ]
-        return pd.Series(descriptions, index=file1_df.index, name="Различия")
+    # ------------------------------------------------------------------
+    # Описания различий
+    # ------------------------------------------------------------------
+    def _describe_rows(self, result: ComparisonResult, rows: IntArray) -> dict[int, str]:
+        """«Что изменилось» для выровненных строк ``rows`` (пары с отличиями)."""
+        if len(rows) == 0:
+            return {}
+        columns = list(result.file1_data.columns)
+        mask = result.differences_mask.to_numpy(dtype=bool)[rows]
+        values1 = result.file1_data.iloc[rows].to_numpy(dtype=object)
+        values2 = result.file2_data.iloc[rows].to_numpy(dtype=object)
+        return {
+            row: " | ".join(
+                self._describe_change(columns[c], values1[k, c], values2[k, c])
+                for c in np.flatnonzero(mask[k])
+            )
+            for k, row in enumerate(rows.tolist())
+        }
 
     def _describe_change(self, column: Any, old_value: Any, new_value: Any) -> str:
         """«столбец: старое → новое» по подходящему анализатору."""
-        analyzer = self._find_analyzer(old_value, new_value)
         try:
-            detail = analyzer.analyze(old_value, new_value, column)
+            if not (isinstance(old_value, str) and isinstance(new_value, str)):
+                # Списки разбирает только ListDifferenceAnalyzer, и только
+                # две строки: остальное сразу к базовому описанию.
+                return f"{column}: {BasicDifferenceAnalyzer.describe(old_value, new_value)}"
+            detail = self._find_analyzer(old_value, new_value).analyze(old_value, new_value, column)
             return f"{column}: {detail.description}"
         except Exception as e:
             self.logger.warning(f"Ошибка анализа различий для {column}: {e}")
             return f"{column}: {old_value} → {new_value}"
-
-    def _add_differences_sheet(
-        self,
-        workbook: Workbook,
-        result: ComparisonResult,
-        row_pairs: pd.DataFrame,
-        options: dict[str, Any],
-    ) -> None:
-        """Лист «Расхождения»: только строки с отличиями.
-
-        Изменённая строка — двумя строками (файл 1, затем файл 2) с одним
-        номером, подсветкой изменённых ячеек и описанием «что изменилось».
-        Строка без пары — одной строкой. «Строка в файле» — номер строки в
-        исходном файле (``first_data_row`` — номер первой строки данных).
-        """
-        worksheet = workbook.create_sheet(title=DIFFERENCES_SHEET_NAME, index=0)
-        columns = list(result.file1_data.columns)
-        worksheet.append([*DIFFERENCES_LEAD_COLUMNS, *columns, "Что изменилось"])
-        self._style_header_row(worksheet)
-        worksheet.freeze_panes = "A2"
-
-        statuses = row_pairs["status"].to_numpy()
-        changed = np.flatnonzero(statuses != STATUS_EQUAL)
-        if len(changed) == 0:
-            worksheet.append([None, "Расхождений нет"])
-            self._auto_adjust_columns(worksheet)
-            return
-
-        first_data_row = int(options.get("first_data_row", 2))
-        by_key = bool((result.metadata.get("row_match") or {}).get("key_columns"))
-        sources = [
-            (1, result.file1_data.to_numpy(dtype=object), row_pairs["row_file1"].to_numpy()),
-            (2, result.file2_data.to_numpy(dtype=object), row_pairs["row_file2"].to_numpy()),
-        ]
-        mask = result.differences_mask.to_numpy(dtype=bool)
-        lead = len(DIFFERENCES_LEAD_COLUMNS)
-
-        for number, i in enumerate(changed[:DIFFERENCES_SHEET_MAX_ITEMS].tolist(), start=1):
-            status = statuses[i]
-            paired = status in (STATUS_MODIFIED, STATUS_SIMILAR)
-            description = (
-                " | ".join(
-                    self._describe_change(columns[c], sources[0][1][i, c], sources[1][1][i, c])
-                    for c in np.flatnonzero(mask[i])
-                )
-                if paired
-                else None
-            )
-            for file_number, values, source_rows in sources:
-                if source_rows[i] < 0:
-                    continue
-                worksheet.append(
-                    [
-                        number,
-                        self._status_label(status, by_key),
-                        file_number,
-                        int(source_rows[i]) + first_data_row,
-                        *(None if pd.isna(v) else v for v in values[i]),
-                        description if file_number == 1 or not paired else None,
-                    ]
-                )
-                if paired:
-                    for c in np.flatnonzero(mask[i]):
-                        cell = worksheet.cell(row=worksheet.max_row, column=lead + int(c) + 1)
-                        cell.fill = self.highlight_fill
-                        cell.border = self.thin_border
-
-        worksheet.auto_filter.ref = (
-            f"A1:{get_column_letter(worksheet.max_column)}{worksheet.max_row}"
-        )
-        if len(changed) > DIFFERENCES_SHEET_MAX_ITEMS:
-            worksheet.append(
-                [
-                    None,
-                    f"Показаны первые {DIFFERENCES_SHEET_MAX_ITEMS} расхождений "
-                    f"из {len(changed)}; все отмечены на листах данных",
-                ]
-            )
-        self._auto_adjust_columns(worksheet)
-
-    @staticmethod
-    def _status_label(status: str, by_key: bool) -> str:
-        """Подпись статуса строки на листе «Расхождения»."""
-        if status == STATUS_MODIFIED and by_key:
-            return "Изменена (по ключу)"
-        return STATUS_LABELS[status]
 
     def _find_analyzer(self, old_value: Any, new_value: Any) -> IDifferenceAnalyzer:
         """Находит подходящий анализатор для значений"""
@@ -378,85 +342,239 @@ class ExcelOutputFormatter(IOutputFormatter):
         # Возвращаем базовый анализатор, если никто не подошел
         return self.analyzers[-1]
 
-    def _add_summary_sheet(self, workbook: Workbook, result: ComparisonResult) -> None:
-        """Добавляет лист со сводкой результатов"""
-        worksheet = workbook.create_sheet(title="Сводка", index=0)
+    @staticmethod
+    def _status_label(status: str, by_key: bool) -> str:
+        """Подпись статуса строки на листе «Расхождения»."""
+        if status == STATUS_MODIFIED and by_key:
+            return "Изменена (по ключу)"
+        return STATUS_LABELS[status]
 
-        # Заголовок
-        worksheet["A1"] = "Сводка сравнения файлов"
-        worksheet["A1"].font = Font(bold=True, size=16)
-        worksheet["A1"].alignment = self.center_align
-        worksheet.merge_cells("A1:B1")
+    # ------------------------------------------------------------------
+    # Лист «Расхождения»
+    # ------------------------------------------------------------------
+    def _write_differences_sheet(
+        self,
+        workbook: Any,
+        formats: _Formats,
+        progress: _Progress,
+        result: ComparisonResult,
+        row_pairs: pd.DataFrame,
+        plan: _DifferencesPlan,
+        descriptions: dict[int, str],
+        options: dict[str, Any],
+    ) -> None:
+        """Лист «Расхождения»: только строки с отличиями.
 
-        # Статистика
-        row = 3
-        stats = [
-            ("Общее количество ячеек:", result.metadata["total_cells"]),
-            ("Ячеек с различиями:", result.metadata["different_cells"]),
+        Изменённая строка — двумя строками (файл 1, затем файл 2) с одним
+        номером, подсветкой изменённых ячеек и описанием «что изменилось».
+        Строка без пары — одной строкой. «Строка в файле» — номер строки в
+        исходном файле (``first_data_row`` — номер первой строки данных).
+        """
+        worksheet = workbook.add_worksheet(DIFFERENCES_SHEET_NAME)
+        header = [*DIFFERENCES_LEAD_COLUMNS, *map(str, result.file1_data.columns), "Что изменилось"]
+        worksheet.freeze_panes(1, 0)
+
+        if plan.total == 0:
+            _set_widths(worksheet, [header, [None, "Расхождений нет"]])
+            worksheet.write_row(0, 0, header, formats.header)
+            worksheet.write(1, 1, "Расхождений нет")
+            return
+
+        lines = self._difference_lines(result, row_pairs, plan, descriptions, options)
+        sample = list(itertools.islice(lines, COLUMN_WIDTH_SAMPLE_ROWS))
+        _set_widths(worksheet, [header, *(values for values, _ in sample)])
+        worksheet.write_row(0, 0, header, formats.header)
+
+        lead = len(DIFFERENCES_LEAD_COLUMNS)
+        row = 0
+        for values, highlighted in itertools.chain(sample, lines):
+            row += 1
+            _write_line(worksheet, row, values, highlighted, lead, formats, {})
+            if row % PROGRESS_CHUNK_ROWS == 0:
+                progress.rows(
+                    PROGRESS_CHUNK_ROWS, _rows_message(DIFFERENCES_SHEET_NAME, row, plan.lines)
+                )
+        progress.rows(
+            row % PROGRESS_CHUNK_ROWS, _rows_message(DIFFERENCES_SHEET_NAME, row, plan.lines)
+        )
+
+        worksheet.autofilter(0, 0, row, len(header) - 1)
+        if plan.total > len(plan.items):
+            worksheet.write(
+                row + 1,
+                1,
+                f"Показаны первые {len(plan.items)} расхождений из {plan.total}: "
+                f"остальные не помещаются на лист Excel",
+            )
+
+    def _difference_lines(
+        self,
+        result: ComparisonResult,
+        row_pairs: pd.DataFrame,
+        plan: _DifferencesPlan,
+        descriptions: dict[int, str],
+        options: dict[str, Any],
+    ) -> Iterator[tuple[list[Any], IntArray]]:
+        """Строки листа «Расхождения»: значения и подсвечиваемые столбцы данных."""
+        first_data_row = int(options.get("first_data_row", 2))
+        by_key = bool((result.metadata.get("row_match") or {}).get("key_columns"))
+        statuses = row_pairs["status"].to_numpy()
+        sources = row_pairs[["row_file1", "row_file2"]].to_numpy()
+        mask = result.differences_mask.to_numpy(dtype=bool)
+
+        for start in range(0, len(plan.items), PROGRESS_CHUNK_ROWS):
+            chunk = plan.items[start : start + PROGRESS_CHUNK_ROWS]
+            values1 = _rows_as_lists(result.file1_data, chunk)
+            values2 = _rows_as_lists(result.file2_data, chunk)
+            for offset, i in enumerate(chunk.tolist()):
+                number = start + offset + 1
+                status = statuses[i]
+                label = self._status_label(status, by_key)
+                paired = status in _PAIRED
+                highlighted = np.flatnonzero(mask[i]) if paired else _NO_COLUMNS
+                if sources[i, 0] >= 0:
+                    description = descriptions.get(i) if paired else None
+                    line1 = [number, label, 1, int(sources[i, 0]) + first_data_row]
+                    yield [*line1, *values1[offset], description], highlighted
+                if sources[i, 1] >= 0:
+                    line2 = [number, label, 2, int(sources[i, 1]) + first_data_row]
+                    yield [*line2, *values2[offset], None], highlighted
+
+    # ------------------------------------------------------------------
+    # Листы с полными данными
+    # ------------------------------------------------------------------
+    def _write_data_sheets(
+        self,
+        workbook: Any,
+        formats: _Formats,
+        progress: _Progress,
+        result: ComparisonResult,
+        statuses: npt.NDArray[Any],
+        descriptions: dict[int, str],
+        options: dict[str, Any],
+    ) -> None:
+        """Два листа с данными файлов; столбец «Различия» общий: «файл 1 → файл 2»."""
+        differences = _differences_column(statuses, descriptions)
+        taken = {SUMMARY_SHEET_NAME.casefold(), DIFFERENCES_SHEET_NAME.casefold()}
+        for name_option, default, frame in (
+            ("file1_name", "Файл 1", result.file1_data),
+            ("file2_name", "Файл 2", result.file2_data),
+        ):
+            name = _unique_sheet_name(str(options.get(name_option, default)), taken)
+            self._write_data_sheet(workbook, formats, progress, name, frame, differences, result)
+
+    def _write_data_sheet(
+        self,
+        workbook: Any,
+        formats: _Formats,
+        progress: _Progress,
+        name: str,
+        frame: pd.DataFrame,
+        differences: npt.NDArray[np.object_],
+        result: ComparisonResult,
+    ) -> None:
+        """Лист с данными файла и подсветкой различающихся ячеек."""
+        worksheet = workbook.add_worksheet(name)
+        header = [*map(str, frame.columns), "Различия"]
+        sample = _rows_as_lists(frame, slice(0, COLUMN_WIDTH_SAMPLE_ROWS))
+        _set_widths(
+            worksheet,
+            [header, *([*values, differences[k]] for k, values in enumerate(sample))],
+        )
+        worksheet.write_row(0, 0, header, formats.header)
+
+        mask = result.differences_mask.to_numpy(dtype=bool)
+        has_differences = mask.any(axis=1)
+        date_columns = _date_columns(frame)
+        n_rows = len(frame)
+        for start in range(0, n_rows, PROGRESS_CHUNK_ROWS):
+            stop = min(start + PROGRESS_CHUNK_ROWS, n_rows)
+            for offset, values in enumerate(_rows_as_lists(frame, slice(start, stop))):
+                i = start + offset
+                values.append(differences[i])
+                highlighted = np.flatnonzero(mask[i]) if has_differences[i] else _NO_COLUMNS
+                _write_line(worksheet, i + 1, values, highlighted, 0, formats, date_columns)
+            progress.rows(stop - start, _rows_message(name, stop, n_rows))
+
+    # ------------------------------------------------------------------
+    # Лист «Сводка»
+    # ------------------------------------------------------------------
+    def _write_summary_sheet(
+        self,
+        workbook: Any,
+        formats: _Formats,
+        result: ComparisonResult,
+        data_sheets_note: str | None,
+    ) -> None:
+        """Лист со сводкой результатов: пишется построчно сверху вниз."""
+        worksheet = workbook.add_worksheet(SUMMARY_SHEET_NAME)
+        rows = self._summary_rows(result, data_sheets_note)
+        _set_widths(worksheet, [[value for value, _ in cells] for cells in rows])
+
+        by_name = {
+            "header": formats.header,
+            "section": formats.section,
+            "bold": formats.bold,
+            "bordered": formats.bordered,
+        }
+        title, _ = rows[0][0]
+        worksheet.merge_range(0, 0, 0, 1, title, formats.title)
+        for row, cells in enumerate(rows[1:], start=1):
+            for column, (value, style) in enumerate(cells):
+                worksheet.write(row, column, _plain(value), by_name.get(style or ""))
+
+    def _summary_rows(
+        self, result: ComparisonResult, data_sheets_note: str | None
+    ) -> list[list[tuple[Any, str | None]]]:
+        """Строки сводки: ячейки (значение, стиль) по порядку."""
+        metadata = result.metadata
+        rows: list[list[tuple[Any, str | None]]] = [[("Сводка сравнения файлов", "title")], []]
+
+        stats: list[tuple[str, Any]] = [
+            ("Общее количество ячеек:", metadata["total_cells"]),
+            ("Ячеек с различиями:", metadata["different_cells"]),
             (
                 "Процент схожести:",
-                f"{floor_percentage(result.metadata['similarity_percentage']):.2f}%",
+                f"{floor_percentage(metadata['similarity_percentage']):.2f}%",
             ),
             (
                 "Размер данных:",
-                f"{result.metadata['shape'][0]} строк × {result.metadata['shape'][1]} столбцов",
+                f"{metadata['shape'][0]} строк × {metadata['shape'][1]} столбцов",
             ),
         ]
-
-        for label, value in stats:
-            worksheet[f"A{row}"] = label
-            worksheet[f"B{row}"] = value
-            worksheet[f"A{row}"].font = Font(bold=True)
-            row += 1
+        if data_sheets_note:
+            stats.append(("Полные листы данных:", data_sheets_note))
+        rows += [[(label, "bold"), (value, None)] for label, value in stats]
 
         # Сопоставление строк — только для сравнения без учёта порядка
-        row_match = result.metadata.get("row_match")
+        row_match = metadata.get("row_match")
         if row_match:
-            row = self._add_row_match_section(worksheet, row + 2, row_match)
+            rows += [[], []]
+            rows += self._row_match_rows(row_match)
 
         # Различия по столбцам
-        row += 2
-        worksheet[f"A{row}"] = "Различия по столбцам:"
-        worksheet[f"A{row}"].font = Font(bold=True, size=14)
-        row += 1
+        rows += [[], []]
+        rows.append([("Различия по столбцам:", "section")])
+        rows.append(
+            [
+                ("Столбец", "header"),
+                ("Количество различий", "header"),
+                ("Процент различий", "header"),
+            ]
+        )
+        mask = result.differences_mask
+        for column in mask.columns:
+            count = int(mask[column].sum())
+            share = count / len(mask) * 100 if len(mask) else 0.0
+            rows.append([(column, "bordered"), (count, "bordered"), (f"{share:.1f}%", "bordered")])
+        return rows
 
-        # Заголовки таблицы
-        worksheet[f"A{row}"] = "Столбец"
-        worksheet[f"B{row}"] = "Количество различий"
-        worksheet[f"C{row}"] = "Процент различий"
-
-        for col in ["A", "B", "C"]:
-            worksheet[f"{col}{row}"].font = self.header_font
-            worksheet[f"{col}{row}"].fill = self.header_fill
-            worksheet[f"{col}{row}"].border = self.thin_border
-
-        row += 1
-
-        # Статистика по столбцам
-        for col_name in result.differences_mask.columns:
-            diff_count = result.differences_mask[col_name].sum()
-            diff_percentage = (diff_count / len(result.differences_mask)) * 100
-
-            worksheet[f"A{row}"] = col_name
-            worksheet[f"B{row}"] = diff_count
-            worksheet[f"C{row}"] = f"{diff_percentage:.1f}%"
-
-            for col in ["A", "B", "C"]:
-                worksheet[f"{col}{row}"].border = self.thin_border
-
-            row += 1
-
-        # Автоподбор ширины столбцов
-        self._auto_adjust_columns(worksheet)
-
-    def _add_row_match_section(self, worksheet: Any, row: int, row_match: dict[str, Any]) -> int:
-        """Пишет блок сопоставления строк (режим без учёта порядка строк).
-
-        Возвращает номер строки сразу после блока.
-        """
-        worksheet[f"A{row}"] = "Сопоставление строк (без учёта порядка):"
-        worksheet[f"A{row}"].font = Font(bold=True, size=14)
-        row += 1
+    @staticmethod
+    def _row_match_rows(row_match: dict[str, Any]) -> list[list[tuple[Any, str | None]]]:
+        """Блок сопоставления строк (режим без учёта порядка строк)."""
+        rows: list[list[tuple[Any, str | None]]] = [
+            [("Сопоставление строк (без учёта порядка):", "section")]
+        ]
 
         key_columns = row_match.get("key_columns") or []
         similar = row_match.get("similar", 0)
@@ -478,64 +596,156 @@ class ExcelOutputFormatter(IOutputFormatter):
         ]
         if similar:
             lines.append(("Примечание:", SIMILARITY_NOTE))
-        for label, value in lines:
-            worksheet[f"A{row}"] = label
-            worksheet[f"B{row}"] = value
-            worksheet[f"A{row}"].font = Font(bold=True)
-            row += 1
+        rows += [[(label, "bold"), (value, None)] for label, value in lines]
 
         totals = row_match.get("column_totals") or {}
         if totals:
-            row = self._add_column_totals_table(worksheet, row + 1, totals)
+            rows.append([])
+            headers = ["Столбец", "Сумма в файле 1", "Сумма в файле 2", "Разница"]
+            rows.append([(header, "header") for header in headers])
+            for column_name, sums in totals.items():
+                values = [column_name, sums["file1"], sums["file2"], sums["file2"] - sums["file1"]]
+                rows.append([(value, "bordered") for value in values])
+        return rows
 
-        return row
 
-    def _add_column_totals_table(
-        self, worksheet: Any, row: int, totals: dict[str, dict[str, float | int]]
-    ) -> int:
-        """Таблица итогов по числовым столбцам; возвращает строку после таблицы."""
-        headers = ["Столбец", "Сумма в файле 1", "Сумма в файле 2", "Разница"]
-        for col, header in zip(["A", "B", "C", "D"], headers, strict=True):
-            worksheet[f"{col}{row}"] = header
-            worksheet[f"{col}{row}"].font = self.header_font
-            worksheet[f"{col}{row}"].fill = self.header_fill
-            worksheet[f"{col}{row}"].border = self.thin_border
-        row += 1
+def _discard(workbook: Any) -> None:
+    """Бросает недописанную книгу: ни отчёта, ни временных файлов.
 
-        for column_name, sums in totals.items():
-            values = [column_name, sums["file1"], sums["file2"], sums["file2"] - sums["file1"]]
-            for col, value in zip(["A", "B", "C", "D"], values, strict=True):
-                worksheet[f"{col}{row}"] = value
-                worksheet[f"{col}{row}"].border = self.thin_border
-            row += 1
+    Без этого XlsxWriter сам закроет книгу в ``__del__`` и оставит на диске
+    недописанный отчёт, а файлы строк режима ``constant_memory`` (они
+    создаются через ``mkstemp`` и удаляются только при успешном ``close``)
+    останутся во временной папке. ``_opt_close`` и ``row_data_filename`` —
+    внутренности XlsxWriter 3.x, поэтому через ``getattr``.
+    """
+    workbook.fileclosed = True
+    for worksheet in workbook.worksheets():
+        close = getattr(worksheet, "_opt_close", None)
+        if close is not None:
+            close()
+        filename = getattr(worksheet, "row_data_filename", None)
+        if filename:
+            with contextlib.suppress(OSError):
+                os.unlink(filename)
 
-        return row
 
-    def _auto_adjust_columns(self, worksheet: Any) -> None:
-        """Подбирает ширину столбцов по выборке первых строк.
+def _target(output_path: Any) -> Any:
+    """Имя файла для XlsxWriter; файловый объект (BytesIO) — как есть."""
+    if isinstance(output_path, (str, os.PathLike)):
+        return os.fspath(output_path)
+    return output_path
 
-        Раньше функция проходила по ``worksheet.columns``, материализуя КАЖДУЮ
-        ячейку листа (для листа 58k×19 — около 1.1 млн ячеек на лист) и вызывая
-        ``str()``+``len()`` для каждой; это и было основной стоимостью при
-        формировании больших отчётов. Теперь сканируем только первые
-        ``COLUMN_WIDTH_SAMPLE_ROWS`` строк (+ строка заголовков): ширина всё
-        равно лишь визуальная оценка, а стоимость становится практически
-        постоянной и не зависит от числа строк.
-        """
-        last_row = min(worksheet.max_row, COLUMN_WIDTH_SAMPLE_ROWS + 1)
-        widths: dict[str, int] = {}
 
-        for row in worksheet.iter_rows(min_row=1, max_row=last_row):
-            for cell in row:
-                if isinstance(cell, MergedCell):
-                    continue
-                value = cell.value
-                if value is None:
-                    continue
-                length = len(str(value))
-                letter = cell.column_letter
-                if length > widths.get(letter, 0):
-                    widths[letter] = length
+def _rows_as_lists(frame: pd.DataFrame, positions: IntArray | slice) -> list[list[Any]]:
+    """Строки ``frame`` списками обычных Python-значений; NA — None."""
+    chunk = frame.iloc[positions]
+    values = chunk.to_numpy(dtype=object)
+    missing = chunk.isna().to_numpy()
+    if missing.any():
+        values[missing] = None
+    rows: list[list[Any]] = values.tolist()
+    return rows
 
-        for letter, max_length in widths.items():
-            worksheet.column_dimensions[letter].width = min(max_length + 2, 50)
+
+def _write_line(
+    worksheet: Any,
+    row: int,
+    values: list[Any],
+    highlighted: IntArray,
+    offset: int,
+    formats: _Formats,
+    date_columns: dict[int, bool],
+) -> None:
+    """Пишет строку; столбцы данных начинаются с ``offset``.
+
+    Подсвеченные ячейки и ячейки дат дописываются поверх ``write_row`` своим
+    форматом: в режиме ``constant_memory`` это можно, пока строка не сброшена.
+    """
+    worksheet.write_row(row, 0, values)
+    for position, is_date in date_columns.items():
+        value = values[offset + position]
+        if value is not None:
+            worksheet.write_datetime(
+                row, offset + position, value, formats.date if is_date else formats.datetime
+            )
+    for position in highlighted.tolist():
+        column = offset + position
+        value = values[column]
+        if isinstance(value, (datetime, date)):
+            is_date = date_columns.get(position, False)
+            date_format = formats.highlight_date if is_date else formats.highlight_datetime
+            worksheet.write_datetime(row, column, value, date_format)
+        else:
+            worksheet.write(row, column, value, formats.highlight)
+
+
+def _differences_column(
+    statuses: npt.NDArray[Any], descriptions: dict[int, str]
+) -> npt.NDArray[np.object_]:
+    """Столбец «Различия» листов данных: описание или «Только в файле N»."""
+    column = np.full(len(statuses), None, dtype=object)
+    for status in _ONLY:
+        column[statuses == status] = STATUS_LABELS[status]
+    for row, text in descriptions.items():
+        column[row] = text
+    return column
+
+
+def _date_columns(frame: pd.DataFrame) -> dict[int, bool]:
+    """Столбцы datetime: позиция → True, если ни в одном значении нет времени."""
+    columns: dict[int, bool] = {}
+    for position in range(frame.shape[1]):
+        values = frame.iloc[:, position]
+        if pd.api.types.is_datetime64_any_dtype(values):
+            present = values.dropna()
+            columns[position] = bool((present == present.dt.normalize()).all())
+    return columns
+
+
+def _set_widths(worksheet: Any, rows: Iterable[Sequence[Any]]) -> None:
+    """Ширина столбцов по длине значений в ``rows`` (+2, не больше 50)."""
+    widths: dict[int, int] = {}
+    for values in rows:
+        for column, value in enumerate(values):
+            if value is None:
+                continue
+            length = len(str(value))
+            if length > widths.get(column, 0):
+                widths[column] = length
+    for column, length in widths.items():
+        worksheet.set_column(column, column, min(length + 2, 50))
+
+
+def _unique_sheet_name(name: str, taken: set[str]) -> str:
+    """Допустимое и ещё не занятое имя листа (Excel не различает регистр)."""
+    base = _INVALID_SHEET_NAME_CHARS.sub("_", name).strip("'")[:SHEET_NAME_MAX_LEN] or "Лист"
+    candidate = base
+    number = 2
+    while candidate.casefold() in taken:
+        suffix = f" ({number})"
+        candidate = base[: SHEET_NAME_MAX_LEN - len(suffix)] + suffix
+        number += 1
+    taken.add(candidate.casefold())
+    return candidate
+
+
+def _data_sheets_note(n_rows: int) -> str:
+    return (
+        f"не записаны: {_count(n_rows)} строк больше {_count(DATA_SHEETS_MAX_ROWS)}. "
+        "Включите «Полные листы данных для больших файлов» в «Дополнительно» "
+        "или флаг --full-data-sheets"
+    )
+
+
+def _rows_message(sheet: str, done: int, total: int) -> str:
+    return f"Отчёт: лист «{sheet}» — {_count(done)} из {_count(total)} строк"
+
+
+def _count(value: int) -> str:
+    """Число с разделением разрядов пробелом: ``380 598``."""
+    return f"{value:,}".replace(",", " ")
+
+
+def _plain(value: Any) -> Any:
+    """numpy-скаляр → обычное Python-значение (XlsxWriter пишет int64 как float)."""
+    return value.item() if isinstance(value, np.generic) else value

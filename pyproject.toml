@@ -15,6 +15,8 @@ dependencies = [
     "numpy>=1.21.0,<2.0.0; python_version < '3.13'",
     "numpy>=2.1.0,<3.0.0; python_version >= '3.13'",
     "openpyxl>=3.0.10,<4.0.0",
+    "python-calamine>=0.4,<1",
+    "XlsxWriter>=3.2,<4",
     "chardet>=5.0.0,<6.0.0",
     "python-dateutil>=2.8.2,<3.0.0",
     "sv-ttk>=2.6,<3",
@@ -146,5 +148,5 @@ show_error_codes = true
 exclude = ["venv/", ".venv/", "htmlcov/", "build/", "dist/", "src/gui/.*"]
 
 [[tool.mypy.overrides]]
-module = ["chardet.*", "openpyxl.*"]
+module = ["chardet.*", "openpyxl.*", "xlsxwriter.*", "python_calamine.*"]
 ignore_missing_imports = true
