@@ -143,6 +143,21 @@ class TestExcelLoaderEngines:
         excel_loader.load(_write_typed_xlsx(tmp_path / "typed.xlsx"))
         assert read_excel_engines == ["calamine"]
 
+    @pytest.mark.parametrize(
+        ("version", "supported"),
+        [
+            ("1.5.3", False),
+            ("2.1.4", False),
+            ("2.2.0", True),
+            ("2.2.0rc1", True),
+            ("2.3.3", True),
+            ("3.0.0.dev0+12", True),
+        ],
+    )
+    def test_calamine_needs_pandas_2_2(self, version: str, supported: bool) -> None:
+        # requirements.txt allows older pandas; there the loader keeps openpyxl
+        assert excel_module.pandas_supports_calamine(version) is supported
+
     def test_openpyxl_without_calamine(
         self,
         excel_loader: ExcelFileLoader,

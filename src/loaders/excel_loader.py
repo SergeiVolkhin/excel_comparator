@@ -3,6 +3,7 @@
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, ClassVar, Literal, cast
 
@@ -12,12 +13,20 @@ from openpyxl import load_workbook
 from ..core.exceptions import FileLoadError
 from ..core.interfaces import IFileLoader
 
+
+def pandas_supports_calamine(version: str = pd.__version__) -> bool:
+    """``pd.read_excel(engine="calamine")`` есть в pandas начиная с 2.2."""
+    major, minor = (int(part) for part in re.findall(r"\d+", version)[:2])
+    return (major, minor) >= (2, 2)
+
+
 try:
     # Rust-читатель xlsx/xls: в 5–7 раз быстрее openpyxl при тех же типах
     # (вывод типов делает pandas). Явный импорт ещё и для PyInstaller.
     import python_calamine  # noqa: F401
 
-    CALAMINE_AVAILABLE = True
+    # requirements.txt допускает pandas старше 2.2: тогда остаётся openpyxl
+    CALAMINE_AVAILABLE = pandas_supports_calamine()
 except ImportError:  # pragma: no cover - зависит от окружения
     CALAMINE_AVAILABLE = False
 
