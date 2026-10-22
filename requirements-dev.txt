@@ -7,4 +7,6 @@ ruff>=0.6
 mypy>=1.10
 pydantic-settings>=2.3
 types-python-dateutil
-pandas-stubs
+# Стабы — той же мажорной версии, что pandas в requirements.txt (<3.0):
+# стабы 3.x описывают pandas 3 и ломают mypy на коде под pandas 2
+pandas-stubs>=2.2,<3

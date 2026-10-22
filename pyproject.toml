@@ -33,7 +33,7 @@ dev = [
     "mypy>=1.10",
     "pydantic-settings>=2.3",
     "types-python-dateutil",
-    "pandas-stubs",
+    "pandas-stubs>=2.2,<3",
 ]
 
 [project.scripts]
